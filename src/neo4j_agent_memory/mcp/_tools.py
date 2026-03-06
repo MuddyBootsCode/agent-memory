@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 from fastmcp import Context
 
-from neo4j_agent_memory.mcp._common import get_client
+from neo4j_agent_memory.mcp._common import get_client, get_reranker, get_registry, get_router
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -117,10 +117,16 @@ def register_tools(mcp: FastMCP) -> None:
         memory_types: list[str] | None = None,
         session_id: str | None = None,
         threshold: float = 0.7,
+        database: str | None = None,
     ) -> str:
         """Search across all memory types using hybrid vector + graph search.
 
-        Finds relevant messages, entities, preferences, and reasoning traces.
+        Automatically routes to the most relevant database(s) using AI classification.
+        Set database explicitly to target a specific vertical (meetings, projects,
+        research, or neo4j for general).
+
+        If the query is ambiguous, returns disambiguation options instead of results
+        so the calling LLM can ask the user for clarification.
 
         Note: Entity relationships in the graph use a generic RELATED_TO edge type
         with the semantic relationship stored as a property. To find specific
@@ -129,14 +135,44 @@ def register_tools(mcp: FastMCP) -> None:
             WHERE r.relation_type = "WORKS_AT"
             RETURN a.name, r.relation_type, b.name
         """
-        client = get_client(ctx)
+        from neo4j_agent_memory.mcp._merge import merge_search_results
+
+        try:
+            registry = get_registry(ctx)
+        except RuntimeError:
+            # Fall back to single-client mode
+            registry = None
+
+        router = get_router(ctx)
+
+        # Step 1: Determine target databases
+        route = None
+        if database:
+            target_dbs = [database]
+        elif registry is None:
+            # Single-client mode — no routing
+            target_dbs = ["neo4j"]
+        else:
+            route = await router.route_query(query)
+
+            # Step 2: Confidence gate — if ambiguous, ask for clarification
+            if route.ambiguous:
+                return json.dumps({
+                    "ambiguous": True,
+                    "message": "This query could apply to several areas. Can you clarify?",
+                    "disambiguation_options": route.disambiguation_options,
+                    "suggestion": "You can also pass database='meetings' (or projects, research, neo4j) to target a specific vertical.",
+                })
+
+            target_dbs = route.target_databases
 
         if memory_types is None:
             memory_types = ["messages", "entities", "preferences", "traces"]
 
-        results: dict[str, list[dict[str, Any]]] = {}
+        # Step 3: Search function to run per-database
+        async def _search_db(client, db_name):
+            results: dict[str, list[dict[str, Any]]] = {}
 
-        try:
             if "messages" in memory_types:
                 messages = await client.short_term.search_messages(
                     query=query,
@@ -204,11 +240,49 @@ def register_tools(mcp: FastMCP) -> None:
                     for trace in traces
                 ]
 
+            return results
+
+        try:
+            # Fan out search to target databases
+            if registry and len(target_dbs) > 0:
+                per_db = await registry.query_multiple(target_dbs, _search_db)
+                merged = merge_search_results(per_db)
+            else:
+                # Single-client fallback
+                client = get_client(ctx)
+                merged = await _search_db(client, "neo4j")
+
+            # Step 4: Re-rank results if this was a fan-out query
+            reranked = False
+            if route and route.requires_fanout and len(target_dbs) > 1:
+                reranker = get_reranker(ctx)
+                all_results = []
+                for memory_type, items in merged.items():
+                    for item in items:
+                        item["_result_type"] = memory_type
+                    all_results.extend(items)
+
+                reranked_results = await reranker.rerank(query, all_results)
+
+                # Rebuild merged dict from reranked results
+                merged = {}
+                for item in reranked_results:
+                    rt = item.pop("_result_type", "unknown")
+                    if rt not in merged:
+                        merged[rt] = []
+                    merged[rt].append(item)
+                reranked = True
+
         except Exception as e:
             logger.error(f"Error in memory_search: {e}")
             return json.dumps({"error": str(e)})
 
-        return json.dumps({"results": results, "query": query}, default=str)
+        return json.dumps({
+            "results": merged,
+            "query": query,
+            "databases_searched": target_dbs,
+            "reranked": reranked,
+        }, default=str)
 
     @mcp.tool()
     async def memory_store(
@@ -222,8 +296,13 @@ def register_tools(mcp: FastMCP) -> None:
         predicate: str | None = None,
         object_value: str | None = None,
         metadata: dict[str, Any] | None = None,
+        database: str | None = None,
     ) -> str:
         """Store a memory in the knowledge graph.
+
+        Automatically routes to the most relevant database vertical using AI
+        classification. Set database explicitly to target a specific vertical
+        (meetings, projects, research, or neo4j for general).
 
         Supports messages, facts (SPO triples), and user preferences.
         Automatically extracts entities from message content.
@@ -238,10 +317,30 @@ def register_tools(mcp: FastMCP) -> None:
             predicate: Fact predicate/relationship (required for fact type).
             object_value: Fact object (required for fact type).
             metadata: Optional metadata to attach.
+            database: Target database vertical. If None, auto-routed by AI.
         """
-        client = get_client(ctx)
+        router = get_router(ctx)
+
+        # Route to target database
+        if database:
+            target_db = database
+        else:
+            route = await router.route_storage(content, memory_type)
+            target_db = route.primary_database
+
+        # Get the appropriate client
+        try:
+            registry = get_registry(ctx)
+            client = registry.get(target_db)
+        except (RuntimeError, KeyError):
+            client = get_client(ctx)
+            target_db = "neo4j"
 
         try:
+            result_data: dict[str, Any] | None = None
+            stored_id: str | None = None
+            stored_name: str | None = None
+
             if memory_type == "message":
                 if not session_id:
                     return json.dumps({"error": "session_id required for message storage"})
@@ -260,15 +359,16 @@ def register_tools(mcp: FastMCP) -> None:
                     client, str(message.id)
                 )
 
-                return json.dumps(
-                    {
-                        "stored": True,
-                        "type": "message",
-                        "id": str(message.id),
-                        "session_id": session_id,
-                        "entities_embedded": embedded_count,
-                    }
-                )
+                stored_id = str(message.id)
+                stored_name = content[:80]
+                result_data = {
+                    "stored": True,
+                    "type": "message",
+                    "id": stored_id,
+                    "session_id": session_id,
+                    "entities_embedded": embedded_count,
+                    "database": target_db,
+                }
 
             elif memory_type == "preference":
                 if not category:
@@ -279,14 +379,15 @@ def register_tools(mcp: FastMCP) -> None:
                     preference=content,
                     generate_embedding=True,
                 )
-                return json.dumps(
-                    {
-                        "stored": True,
-                        "type": "preference",
-                        "id": str(preference.id),
-                        "category": category,
-                    }
-                )
+                stored_id = str(preference.id)
+                stored_name = f"{category}: {content[:60]}"
+                result_data = {
+                    "stored": True,
+                    "type": "preference",
+                    "id": stored_id,
+                    "category": category,
+                    "database": target_db,
+                }
 
             elif memory_type == "fact":
                 if not all([subject, predicate, object_value]):
@@ -299,17 +400,37 @@ def register_tools(mcp: FastMCP) -> None:
                     predicate=predicate,
                     obj=object_value,
                 )
-                return json.dumps(
-                    {
-                        "stored": True,
-                        "type": "fact",
-                        "id": str(fact.id) if hasattr(fact, "id") else None,
-                        "triple": f"{subject} -> {predicate} -> {object_value}",
-                    }
-                )
+                stored_id = str(fact.id) if hasattr(fact, "id") else None
+                stored_name = f"{subject} -> {predicate} -> {object_value}"
+                result_data = {
+                    "stored": True,
+                    "type": "fact",
+                    "id": stored_id,
+                    "triple": stored_name,
+                    "database": target_db,
+                }
 
             else:
                 return json.dumps({"error": f"Unknown memory type: {memory_type}"})
+
+            # Create proxy reference in general DB for vertical storage
+            if target_db != "neo4j" and stored_id and result_data:
+                try:
+                    from neo4j_agent_memory.mcp._proxy import create_proxy_reference
+
+                    general_client = registry.general
+                    proxy_id = await create_proxy_reference(
+                        general_client=general_client,
+                        source_db=target_db,
+                        node_id=stored_id,
+                        node_type=memory_type,
+                        node_name=stored_name or content[:80],
+                    )
+                    result_data["proxy_id"] = proxy_id
+                except Exception as proxy_err:
+                    logger.warning("Proxy creation failed: %s", proxy_err)
+
+            return json.dumps(result_data)
 
         except Exception as e:
             logger.error(f"Error in memory_store: {e}")
@@ -322,6 +443,7 @@ def register_tools(mcp: FastMCP) -> None:
         entity_type: str | None = None,
         include_neighbors: bool = True,
         max_hops: int = 1,
+        database: str | None = None,
     ) -> str:
         """Look up an entity and retrieve its relationships and neighbors.
 
@@ -329,8 +451,24 @@ def register_tools(mcp: FastMCP) -> None:
         graph traversal to find related entities. Neighbors include the
         semantic relationship type (e.g., WORKS_AT, CREATES, REQUIRES)
         and direction of the connection.
+
+        Automatically searches across relevant database verticals.
+        Set database explicitly to search a specific vertical.
         """
-        client = get_client(ctx)
+        # Determine which databases to search
+        try:
+            registry = get_registry(ctx)
+            if database:
+                target_dbs = [database]
+            else:
+                router = get_router(ctx)
+                route = await router.route_query(f"entity: {name}")
+                target_dbs = route.target_databases
+        except RuntimeError:
+            registry = None
+            target_dbs = ["neo4j"]
+
+        client = get_client(ctx) if registry is None else registry.get(target_dbs[0])
 
         try:
             # Try vector search first (requires entity embeddings)
@@ -380,6 +518,20 @@ def register_tools(mcp: FastMCP) -> None:
                     )
                     result["neighbors"] = neighbors
 
+                # Resolve cross-database proxy references
+                if registry:
+                    try:
+                        from neo4j_agent_memory.mcp._proxy import resolve_proxy_references
+                        cross_refs = await resolve_proxy_references(
+                            general_client=registry.general,
+                            registry=registry,
+                            entity_id=match["id"],
+                        )
+                        if cross_refs:
+                            result["cross_references"] = cross_refs
+                    except Exception as proxy_err:
+                        logger.debug("Proxy resolution skipped: %s", proxy_err)
+
                 return json.dumps(result, default=str)
 
             entity = entities[0]
@@ -401,6 +553,20 @@ def register_tools(mcp: FastMCP) -> None:
                 neighbors = await _get_entity_neighbors(client, str(entity.id), max_hops)
                 result["neighbors"] = neighbors
 
+            # Resolve cross-database proxy references
+            if registry:
+                try:
+                    from neo4j_agent_memory.mcp._proxy import resolve_proxy_references
+                    cross_refs = await resolve_proxy_references(
+                        general_client=registry.general,
+                        registry=registry,
+                        entity_id=str(entity.id),
+                    )
+                    if cross_refs:
+                        result["cross_references"] = cross_refs
+                except Exception as proxy_err:
+                    logger.debug("Proxy resolution skipped: %s", proxy_err)
+
             return json.dumps(result, default=str)
 
         except Exception as e:
@@ -414,12 +580,18 @@ def register_tools(mcp: FastMCP) -> None:
         limit: int = 50,
         before: str | None = None,
         include_metadata: bool = True,
+        database: str | None = None,
     ) -> str:
         """Retrieve conversation history for a session.
 
         Returns messages in chronological order with role, content, and metadata.
+        Set database to target a specific vertical.
         """
-        client = get_client(ctx)
+        try:
+            registry = get_registry(ctx)
+            client = registry.get(database) if database else registry.general
+        except (RuntimeError, KeyError):
+            client = get_client(ctx)
 
         try:
             conversation = await client.short_term.get_conversation(
@@ -457,11 +629,15 @@ def register_tools(mcp: FastMCP) -> None:
         ctx: Context,
         query: str,
         parameters: dict[str, Any] | None = None,
+        database: str | None = None,
     ) -> str:
         """Execute a read-only Cypher query against the knowledge graph.
 
         Only MATCH/RETURN queries are allowed. Write operations
         (CREATE, MERGE, DELETE, SET, REMOVE) are blocked for safety.
+
+        Set database to target a specific vertical (meetings, projects,
+        research, or neo4j for general).
 
         Schema notes for writing effective queries:
         - Entity nodes have labels like :Entity:Person:Individual, :Entity:Organization:Company,
@@ -483,7 +659,11 @@ def register_tools(mcp: FastMCP) -> None:
                 }
             )
 
-        client = get_client(ctx)
+        try:
+            registry = get_registry(ctx)
+            client = registry.get(database) if database else registry.general
+        except (RuntimeError, KeyError):
+            client = get_client(ctx)
 
         try:
             records = await client.graph.execute_read(query, parameters or {})
@@ -510,12 +690,15 @@ def register_tools(mcp: FastMCP) -> None:
         outcome: str | None = None,
         success: bool = True,
         metadata: dict[str, Any] | None = None,
+        database: str | None = None,
     ) -> str:
         """Store a reasoning trace capturing HOW and WHY a task was solved.
 
         Records the task, reasoning steps with thought/action/observation,
         tool calls, and final outcome. Enables later retrieval via
         explain_reasoning to understand the agent's decision process.
+
+        Set database to target a specific vertical.
 
         Args:
             session_id: Session ID for the reasoning trace.
@@ -532,10 +715,15 @@ def register_tools(mcp: FastMCP) -> None:
             outcome: Final outcome or result of the task.
             success: Whether the task was completed successfully.
             metadata: Optional metadata (model, latency, etc.).
+            database: Target database vertical. If None, uses general.
         """
         from neo4j_agent_memory.memory.reasoning import ToolCallStatus
 
-        client = get_client(ctx)
+        try:
+            registry = get_registry(ctx)
+            client = registry.get(database) if database else registry.general
+        except (RuntimeError, KeyError):
+            client = get_client(ctx)
         # Use steps if provided, fall back to tool_calls for backward compat
         step_list = steps or tool_calls or []
 
@@ -612,6 +800,7 @@ def register_tools(mcp: FastMCP) -> None:
         query: str | None = None,
         session_id: str | None = None,
         synthesize: bool = False,
+        database: str | None = None,
     ) -> str:
         """Retrieve and explain the reasoning behind a past decision or answer.
 
@@ -625,14 +814,20 @@ def register_tools(mcp: FastMCP) -> None:
 
         Set synthesize=true for a natural-language explanation powered by LLM.
         Default returns the raw reasoning chain.
+        Set database to search a specific vertical.
 
         Args:
             trace_id: Specific trace ID to explain.
             query: Semantic search query to find relevant trace.
             session_id: Session ID to get most recent trace from.
             synthesize: If true, produce LLM-synthesized explanation (slower).
+            database: Target database vertical. If None, uses general.
         """
-        client = get_client(ctx)
+        try:
+            registry = get_registry(ctx)
+            client = registry.get(database) if database else registry.general
+        except (RuntimeError, KeyError):
+            client = get_client(ctx)
 
         try:
             trace = None
@@ -741,6 +936,7 @@ def register_tools(mcp: FastMCP) -> None:
         text: str,
         session_id: str,
         store: bool = True,
+        database: str | None = None,
     ) -> str:
         """Extract structured reasoning from conversation text using LLM analysis.
 
@@ -748,13 +944,19 @@ def register_tools(mcp: FastMCP) -> None:
         hypotheses formed, evidence gathered, decisions made, and conclusions drawn.
 
         Optionally stores the extracted reasoning as a trace in memory.
+        Set database to target a specific vertical.
 
         Args:
             text: Conversation transcript or text to analyze.
             session_id: Session ID to associate with the extracted trace.
             store: If true (default), store extracted reasoning as a trace.
+            database: Target database vertical. If None, uses general.
         """
-        client = get_client(ctx)
+        try:
+            registry = get_registry(ctx)
+            client = registry.get(database) if database else registry.general
+        except (RuntimeError, KeyError):
+            client = get_client(ctx)
 
         try:
             from neo4j_agent_memory.extraction.reasoning_extractor import (

@@ -97,6 +97,36 @@ class BamlAsyncClient:
                 "text": text,"entity_types": entity_types,
             })
             return typing.cast(types.ExtractionOutput, __result__.cast_to(types, types, stream_types, False, __runtime__))
+    async def ExtractMeetingEntities(self, text: str,
+        baml_options: BamlCallOptions = {},
+    ) -> types.MeetingExtractionOutput:
+        # Check if on_tick is provided
+        if 'on_tick' in baml_options:
+            # Use streaming internally when on_tick is provided
+            __stream__ = self.stream.ExtractMeetingEntities(text=text,
+                baml_options=baml_options)
+            return await __stream__.get_final_response()
+        else:
+            # Original non-streaming code
+            __result__ = await self.__options.merge_options(baml_options).call_function_async(function_name="ExtractMeetingEntities", args={
+                "text": text,
+            })
+            return typing.cast(types.MeetingExtractionOutput, __result__.cast_to(types, types, stream_types, False, __runtime__))
+    async def ExtractProjectEntities(self, text: str,
+        baml_options: BamlCallOptions = {},
+    ) -> types.ProjectExtractionOutput:
+        # Check if on_tick is provided
+        if 'on_tick' in baml_options:
+            # Use streaming internally when on_tick is provided
+            __stream__ = self.stream.ExtractProjectEntities(text=text,
+                baml_options=baml_options)
+            return await __stream__.get_final_response()
+        else:
+            # Original non-streaming code
+            __result__ = await self.__options.merge_options(baml_options).call_function_async(function_name="ExtractProjectEntities", args={
+                "text": text,
+            })
+            return typing.cast(types.ProjectExtractionOutput, __result__.cast_to(types, types, stream_types, False, __runtime__))
     async def ExtractReasoning(self, text: str,
         baml_options: BamlCallOptions = {},
     ) -> types.ReasoningExtractionOutput:
@@ -112,6 +142,66 @@ class BamlAsyncClient:
                 "text": text,
             })
             return typing.cast(types.ReasoningExtractionOutput, __result__.cast_to(types, types, stream_types, False, __runtime__))
+    async def ExtractResearchEntities(self, text: str,
+        baml_options: BamlCallOptions = {},
+    ) -> types.ResearchExtractionOutput:
+        # Check if on_tick is provided
+        if 'on_tick' in baml_options:
+            # Use streaming internally when on_tick is provided
+            __stream__ = self.stream.ExtractResearchEntities(text=text,
+                baml_options=baml_options)
+            return await __stream__.get_final_response()
+        else:
+            # Original non-streaming code
+            __result__ = await self.__options.merge_options(baml_options).call_function_async(function_name="ExtractResearchEntities", args={
+                "text": text,
+            })
+            return typing.cast(types.ResearchExtractionOutput, __result__.cast_to(types, types, stream_types, False, __runtime__))
+    async def RerankResults(self, query: str,results: typing.List["types.ResultItem"],
+        baml_options: BamlCallOptions = {},
+    ) -> types.RerankOutput:
+        # Check if on_tick is provided
+        if 'on_tick' in baml_options:
+            # Use streaming internally when on_tick is provided
+            __stream__ = self.stream.RerankResults(query=query,results=results,
+                baml_options=baml_options)
+            return await __stream__.get_final_response()
+        else:
+            # Original non-streaming code
+            __result__ = await self.__options.merge_options(baml_options).call_function_async(function_name="RerankResults", args={
+                "query": query,"results": results,
+            })
+            return typing.cast(types.RerankOutput, __result__.cast_to(types, types, stream_types, False, __runtime__))
+    async def RouteQuery(self, query: str,context: typing.Optional[str] = None,
+        baml_options: BamlCallOptions = {},
+    ) -> types.RoutingDecision:
+        # Check if on_tick is provided
+        if 'on_tick' in baml_options:
+            # Use streaming internally when on_tick is provided
+            __stream__ = self.stream.RouteQuery(query=query,context=context,
+                baml_options=baml_options)
+            return await __stream__.get_final_response()
+        else:
+            # Original non-streaming code
+            __result__ = await self.__options.merge_options(baml_options).call_function_async(function_name="RouteQuery", args={
+                "query": query,"context": context,
+            })
+            return typing.cast(types.RoutingDecision, __result__.cast_to(types, types, stream_types, False, __runtime__))
+    async def RouteStorage(self, content: str,memory_type: str,context: typing.Optional[str] = None,
+        baml_options: BamlCallOptions = {},
+    ) -> types.RoutingDecision:
+        # Check if on_tick is provided
+        if 'on_tick' in baml_options:
+            # Use streaming internally when on_tick is provided
+            __stream__ = self.stream.RouteStorage(content=content,memory_type=memory_type,context=context,
+                baml_options=baml_options)
+            return await __stream__.get_final_response()
+        else:
+            # Original non-streaming code
+            __result__ = await self.__options.merge_options(baml_options).call_function_async(function_name="RouteStorage", args={
+                "content": content,"memory_type": memory_type,"context": context,
+            })
+            return typing.cast(types.RoutingDecision, __result__.cast_to(types, types, stream_types, False, __runtime__))
     async def SynthesizeExplanation(self, chain: types.ReasoningChainInput,
         baml_options: BamlCallOptions = {},
     ) -> str:
@@ -148,6 +238,30 @@ class BamlStreamClient:
           lambda x: typing.cast(types.ExtractionOutput, x.cast_to(types, types, stream_types, False, __runtime__)),
           __ctx__,
         )
+    def ExtractMeetingEntities(self, text: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.BamlStream[stream_types.MeetingExtractionOutput, types.MeetingExtractionOutput]:
+        __ctx__, __result__ = self.__options.merge_options(baml_options).create_async_stream(function_name="ExtractMeetingEntities", args={
+            "text": text,
+        })
+        return baml_py.BamlStream[stream_types.MeetingExtractionOutput, types.MeetingExtractionOutput](
+          __result__,
+          lambda x: typing.cast(stream_types.MeetingExtractionOutput, x.cast_to(types, types, stream_types, True, __runtime__)),
+          lambda x: typing.cast(types.MeetingExtractionOutput, x.cast_to(types, types, stream_types, False, __runtime__)),
+          __ctx__,
+        )
+    def ExtractProjectEntities(self, text: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.BamlStream[stream_types.ProjectExtractionOutput, types.ProjectExtractionOutput]:
+        __ctx__, __result__ = self.__options.merge_options(baml_options).create_async_stream(function_name="ExtractProjectEntities", args={
+            "text": text,
+        })
+        return baml_py.BamlStream[stream_types.ProjectExtractionOutput, types.ProjectExtractionOutput](
+          __result__,
+          lambda x: typing.cast(stream_types.ProjectExtractionOutput, x.cast_to(types, types, stream_types, True, __runtime__)),
+          lambda x: typing.cast(types.ProjectExtractionOutput, x.cast_to(types, types, stream_types, False, __runtime__)),
+          __ctx__,
+        )
     def ExtractReasoning(self, text: str,
         baml_options: BamlCallOptions = {},
     ) -> baml_py.BamlStream[stream_types.ReasoningExtractionOutput, types.ReasoningExtractionOutput]:
@@ -158,6 +272,54 @@ class BamlStreamClient:
           __result__,
           lambda x: typing.cast(stream_types.ReasoningExtractionOutput, x.cast_to(types, types, stream_types, True, __runtime__)),
           lambda x: typing.cast(types.ReasoningExtractionOutput, x.cast_to(types, types, stream_types, False, __runtime__)),
+          __ctx__,
+        )
+    def ExtractResearchEntities(self, text: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.BamlStream[stream_types.ResearchExtractionOutput, types.ResearchExtractionOutput]:
+        __ctx__, __result__ = self.__options.merge_options(baml_options).create_async_stream(function_name="ExtractResearchEntities", args={
+            "text": text,
+        })
+        return baml_py.BamlStream[stream_types.ResearchExtractionOutput, types.ResearchExtractionOutput](
+          __result__,
+          lambda x: typing.cast(stream_types.ResearchExtractionOutput, x.cast_to(types, types, stream_types, True, __runtime__)),
+          lambda x: typing.cast(types.ResearchExtractionOutput, x.cast_to(types, types, stream_types, False, __runtime__)),
+          __ctx__,
+        )
+    def RerankResults(self, query: str,results: typing.List["types.ResultItem"],
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.BamlStream[stream_types.RerankOutput, types.RerankOutput]:
+        __ctx__, __result__ = self.__options.merge_options(baml_options).create_async_stream(function_name="RerankResults", args={
+            "query": query,"results": results,
+        })
+        return baml_py.BamlStream[stream_types.RerankOutput, types.RerankOutput](
+          __result__,
+          lambda x: typing.cast(stream_types.RerankOutput, x.cast_to(types, types, stream_types, True, __runtime__)),
+          lambda x: typing.cast(types.RerankOutput, x.cast_to(types, types, stream_types, False, __runtime__)),
+          __ctx__,
+        )
+    def RouteQuery(self, query: str,context: typing.Optional[str] = None,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.BamlStream[stream_types.RoutingDecision, types.RoutingDecision]:
+        __ctx__, __result__ = self.__options.merge_options(baml_options).create_async_stream(function_name="RouteQuery", args={
+            "query": query,"context": context,
+        })
+        return baml_py.BamlStream[stream_types.RoutingDecision, types.RoutingDecision](
+          __result__,
+          lambda x: typing.cast(stream_types.RoutingDecision, x.cast_to(types, types, stream_types, True, __runtime__)),
+          lambda x: typing.cast(types.RoutingDecision, x.cast_to(types, types, stream_types, False, __runtime__)),
+          __ctx__,
+        )
+    def RouteStorage(self, content: str,memory_type: str,context: typing.Optional[str] = None,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.BamlStream[stream_types.RoutingDecision, types.RoutingDecision]:
+        __ctx__, __result__ = self.__options.merge_options(baml_options).create_async_stream(function_name="RouteStorage", args={
+            "content": content,"memory_type": memory_type,"context": context,
+        })
+        return baml_py.BamlStream[stream_types.RoutingDecision, types.RoutingDecision](
+          __result__,
+          lambda x: typing.cast(stream_types.RoutingDecision, x.cast_to(types, types, stream_types, True, __runtime__)),
+          lambda x: typing.cast(types.RoutingDecision, x.cast_to(types, types, stream_types, False, __runtime__)),
           __ctx__,
         )
     def SynthesizeExplanation(self, chain: types.ReasoningChainInput,
@@ -187,11 +349,53 @@ class BamlHttpRequestClient:
             "text": text,"entity_types": entity_types,
         }, mode="request")
         return __result__
+    async def ExtractMeetingEntities(self, text: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.baml_py.HTTPRequest:
+        __result__ = await self.__options.merge_options(baml_options).create_http_request_async(function_name="ExtractMeetingEntities", args={
+            "text": text,
+        }, mode="request")
+        return __result__
+    async def ExtractProjectEntities(self, text: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.baml_py.HTTPRequest:
+        __result__ = await self.__options.merge_options(baml_options).create_http_request_async(function_name="ExtractProjectEntities", args={
+            "text": text,
+        }, mode="request")
+        return __result__
     async def ExtractReasoning(self, text: str,
         baml_options: BamlCallOptions = {},
     ) -> baml_py.baml_py.HTTPRequest:
         __result__ = await self.__options.merge_options(baml_options).create_http_request_async(function_name="ExtractReasoning", args={
             "text": text,
+        }, mode="request")
+        return __result__
+    async def ExtractResearchEntities(self, text: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.baml_py.HTTPRequest:
+        __result__ = await self.__options.merge_options(baml_options).create_http_request_async(function_name="ExtractResearchEntities", args={
+            "text": text,
+        }, mode="request")
+        return __result__
+    async def RerankResults(self, query: str,results: typing.List["types.ResultItem"],
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.baml_py.HTTPRequest:
+        __result__ = await self.__options.merge_options(baml_options).create_http_request_async(function_name="RerankResults", args={
+            "query": query,"results": results,
+        }, mode="request")
+        return __result__
+    async def RouteQuery(self, query: str,context: typing.Optional[str] = None,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.baml_py.HTTPRequest:
+        __result__ = await self.__options.merge_options(baml_options).create_http_request_async(function_name="RouteQuery", args={
+            "query": query,"context": context,
+        }, mode="request")
+        return __result__
+    async def RouteStorage(self, content: str,memory_type: str,context: typing.Optional[str] = None,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.baml_py.HTTPRequest:
+        __result__ = await self.__options.merge_options(baml_options).create_http_request_async(function_name="RouteStorage", args={
+            "content": content,"memory_type": memory_type,"context": context,
         }, mode="request")
         return __result__
     async def SynthesizeExplanation(self, chain: types.ReasoningChainInput,
@@ -216,11 +420,53 @@ class BamlHttpStreamRequestClient:
             "text": text,"entity_types": entity_types,
         }, mode="stream")
         return __result__
+    async def ExtractMeetingEntities(self, text: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.baml_py.HTTPRequest:
+        __result__ = await self.__options.merge_options(baml_options).create_http_request_async(function_name="ExtractMeetingEntities", args={
+            "text": text,
+        }, mode="stream")
+        return __result__
+    async def ExtractProjectEntities(self, text: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.baml_py.HTTPRequest:
+        __result__ = await self.__options.merge_options(baml_options).create_http_request_async(function_name="ExtractProjectEntities", args={
+            "text": text,
+        }, mode="stream")
+        return __result__
     async def ExtractReasoning(self, text: str,
         baml_options: BamlCallOptions = {},
     ) -> baml_py.baml_py.HTTPRequest:
         __result__ = await self.__options.merge_options(baml_options).create_http_request_async(function_name="ExtractReasoning", args={
             "text": text,
+        }, mode="stream")
+        return __result__
+    async def ExtractResearchEntities(self, text: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.baml_py.HTTPRequest:
+        __result__ = await self.__options.merge_options(baml_options).create_http_request_async(function_name="ExtractResearchEntities", args={
+            "text": text,
+        }, mode="stream")
+        return __result__
+    async def RerankResults(self, query: str,results: typing.List["types.ResultItem"],
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.baml_py.HTTPRequest:
+        __result__ = await self.__options.merge_options(baml_options).create_http_request_async(function_name="RerankResults", args={
+            "query": query,"results": results,
+        }, mode="stream")
+        return __result__
+    async def RouteQuery(self, query: str,context: typing.Optional[str] = None,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.baml_py.HTTPRequest:
+        __result__ = await self.__options.merge_options(baml_options).create_http_request_async(function_name="RouteQuery", args={
+            "query": query,"context": context,
+        }, mode="stream")
+        return __result__
+    async def RouteStorage(self, content: str,memory_type: str,context: typing.Optional[str] = None,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.baml_py.HTTPRequest:
+        __result__ = await self.__options.merge_options(baml_options).create_http_request_async(function_name="RouteStorage", args={
+            "content": content,"memory_type": memory_type,"context": context,
         }, mode="stream")
         return __result__
     async def SynthesizeExplanation(self, chain: types.ReasoningChainInput,

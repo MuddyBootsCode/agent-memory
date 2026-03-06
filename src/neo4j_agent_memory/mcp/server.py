@@ -50,14 +50,19 @@ try:
 
             @asynccontextmanager
             async def lifespan(server: FastMCP):  # noqa: E303
-                """Manage Docker container and MemoryClient lifecycle."""
+                """Manage Docker container and multi-database MemoryClient lifecycle."""
                 import os
 
                 from neo4j_agent_memory import MemoryClient as _MemoryClient
+                from neo4j_agent_memory.config.settings import Neo4jConfig
+                from neo4j_agent_memory.mcp._database_init import (
+                    ensure_databases_exist,
+                )
                 from neo4j_agent_memory.mcp._docker import (
                     Neo4jDockerManager,
                     connect_with_retry,
                 )
+                from neo4j_agent_memory.mcp._registry import ClientRegistry
 
                 # Patch factory to support BAML extraction [RFI-R1]
                 import neo4j_agent_memory.extraction.factory as _factory_mod
@@ -78,8 +83,10 @@ try:
                     compose_file=docker_cfg.get("compose_file"),
                 )
 
+                registry = ClientRegistry()
+
                 async with docker_mgr:
-                    # Phase 2: Connect MemoryClient with retries
+                    # Phase 2: Connect general MemoryClient with retries
                     try:
                         client, client_cm = await connect_with_retry(
                             lambda: _MemoryClient(settings),
@@ -93,8 +100,66 @@ try:
                             "reachable: %s",
                             exc,
                         )
-                        yield {"client": None}
+                        yield {"client": None, "registry": None, "router": None, "reranker": None}
                         return
+
+                    registry.register("neo4j", client, client_cm)
+
+                    # Phase 3: Ensure vertical databases exist
+                    try:
+                        driver = client.graph._driver
+                        verticals = await ensure_databases_exist(driver)
+                    except Exception as e:
+                        logger.warning(
+                            "Could not create vertical databases: %s. "
+                            "Continuing with general DB only.", e
+                        )
+                        verticals = []
+
+                    # Phase 4: Create clients for each vertical
+                    for db_name in verticals:
+                        try:
+                            from pydantic import SecretStr
+
+                            vertical_settings = type(settings)(
+                                neo4j=Neo4jConfig(
+                                    uri=neo4j_cfg.uri,
+                                    username=neo4j_cfg.username,
+                                    password=neo4j_cfg.password,
+                                    database=db_name,
+                                )
+                            )
+                            v_client, v_cm = await connect_with_retry(
+                                lambda s=vertical_settings: _MemoryClient(s),
+                                max_attempts=3,
+                                delay=2.0,
+                            )
+                            registry.register(db_name, v_client, v_cm)
+                            logger.info("Client ready for database '%s'", db_name)
+                        except Exception as e:
+                            logger.warning(
+                                "Failed to connect to '%s': %s", db_name, e
+                            )
+
+                    # Phase 5: Create router and reranker
+                    router = None
+                    reranker = None
+                    try:
+                        from neo4j_agent_memory.routing.router import (
+                            QueryRouter,
+                            ResultReranker,
+                        )
+
+                        router = QueryRouter(available_databases=registry.databases)
+                        reranker = ResultReranker(enabled=True)
+                        logger.info("Query router ready for databases: %s", registry.databases)
+                    except Exception as e:
+                        logger.warning("Could not initialize router: %s", e)
+
+                    logger.info(
+                        "ClientRegistry ready with databases: %s",
+                        registry.databases,
+                    )
 
                     try:
                         # Verify BAML patch took effect [RFI-R1]
@@ -115,9 +180,14 @@ try:
                                     _ext_name,
                                 )
 
-                        yield {"client": client}
+                        yield {
+                            "client": client,
+                            "registry": registry,
+                            "router": router,
+                            "reranker": reranker,
+                        }
                     finally:
-                        await client_cm.__aexit__(None, None, None)
+                        await registry.close_all()
 
         mcp = FastMCP(
             server_name,
