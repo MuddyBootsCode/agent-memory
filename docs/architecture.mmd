@@ -1,0 +1,168 @@
+graph TB
+    subgraph "neo4j-agent-memory-mcp (Overlay Project)"
+        direction TB
+
+        subgraph "Entry Points"
+            CLI["main()<br/>CLI Entry Point<br/><i>server.py:279</i>"]
+            RunServer["run_server()<br/><i>server.py:204</i>"]
+            CreateMCP["create_mcp_server()<br/><i>server.py:22</i>"]
+        end
+
+        subgraph "MCP Layer (src/neo4j_agent_memory/mcp/)"
+            direction TB
+            Server["server.py<br/>FastMCP Server + Lifespan"]
+
+            subgraph "Tools (_tools.py) — 8 MCP Tools"
+                T1["memory_search<br/><i>Hybrid vector + graph</i>"]
+                T2["memory_store<br/><i>Messages, facts, prefs</i>"]
+                T3["entity_lookup<br/><i>Entity + neighbors</i>"]
+                T4["conversation_history<br/><i>Session messages</i>"]
+                T5["graph_query<br/><i>Read-only Cypher</i>"]
+                T6["add_reasoning_trace<br/><i>Thought→Action→Obs</i>"]
+                T7["explain_reasoning<br/><i>Why did you decide X?</i>"]
+                T8["extract_reasoning<br/><i>BAML extraction from text</i>"]
+            end
+
+            subgraph "Resources (_resources.py) — 4 Resources"
+                R1["conversations/{session_id}"]
+                R2["entities/{entity_name}"]
+                R3["preferences/{category}"]
+                R4["graph/stats"]
+            end
+
+            subgraph "Prompts (_prompts.py) — 4 Prompts"
+                P1["memory_search_guide"]
+                P2["entity_analysis"]
+                P3["conversation_summary"]
+                P4["reasoning_explanation"]
+            end
+
+            Common["_common.py<br/>get_client(ctx)"]
+            Docker["_docker.py<br/>Neo4jDockerManager<br/>connect_with_retry()"]
+        end
+
+        subgraph "Extraction Layer (src/neo4j_agent_memory/extraction/)"
+            direction TB
+            BamlExt["baml_extractor.py<br/>BamlEntityExtractor"]
+            ReasonExt["reasoning_extractor.py<br/>BamlReasoningExtractor"]
+            FactoryExt["factory_ext.py<br/>create_extractor() patch"]
+            BamlCfg["baml_config.py"]
+        end
+
+        subgraph "BAML Definitions (baml_src/)"
+            direction TB
+            BClients["clients.baml<br/>OpenAI | Anthropic | Gemini | Resilient"]
+            BExtract["extraction.baml<br/>ExtractEntities()"]
+            BReason["reasoning.baml<br/>ExtractReasoning()<br/>SynthesizeExplanation()"]
+            BGen["generators.baml<br/>→ python/pydantic"]
+        end
+
+        BamlClient["baml_client/<br/>Generated async/sync clients"]
+    end
+
+    subgraph "Base Library (neo4j-agent-memory, site-packages)"
+        direction TB
+
+        subgraph "Overlay Namespace Pattern"
+            Init["__init__.py<br/>__path__ = [overlay, installed]<br/>Re-exports MemoryClient, MemorySettings"]
+        end
+
+        MemClient["MemoryClient"]
+        MemSettings["MemorySettings"]
+
+        subgraph "3 Memory Subsystems"
+            direction TB
+
+            subgraph "Short-Term Memory"
+                STM_Conv["Conversations"]
+                STM_Msg["Messages<br/><i>vector index 1536-dim</i>"]
+            end
+
+            subgraph "Long-Term Memory"
+                LTM_Ent["Entities<br/><i>PERSON, ORG, LOCATION,<br/>EVENT, OBJECT</i>"]
+                LTM_Rel["Relationships"]
+                LTM_Pref["Preferences"]
+                LTM_Fact["Facts<br/><i>SPO Triples</i>"]
+            end
+
+            subgraph "Reasoning Memory"
+                RM_Trace["ReasoningTrace"]
+                RM_Step["ReasoningStep<br/><i>thought, action, observation,<br/>alternatives_considered</i>"]
+                RM_Tool["ToolCall → Tool"]
+            end
+        end
+
+        subgraph "Base Modules (pass-through)"
+            Config["config/"]
+            Core["core/"]
+            Memory["memory/"]
+            Graph["graph/"]
+            BaseExtract["extraction/<br/><i>base, factory, llm, spacy</i>"]
+        end
+    end
+
+    subgraph "Infrastructure"
+        Neo4j["Neo4j 5<br/>Graph Database"]
+        DockerC["Docker Container<br/>docker-compose.yml"]
+        LLM_API["LLM APIs<br/>OpenAI / Anthropic / Gemini"]
+    end
+
+    subgraph "Transport"
+        STDIO["stdio"]
+        SSE["SSE"]
+        HTTP["HTTP"]
+    end
+
+    %% Connections
+    CLI --> RunServer
+    RunServer --> CreateMCP
+    CreateMCP --> Server
+
+    Server --> T1 & T2 & T3 & T4 & T5 & T6 & T7 & T8
+    Server --> R1 & R2 & R3 & R4
+    Server --> P1 & P2 & P3 & P4
+    Server --> STDIO & SSE & HTTP
+
+    T1 & T2 & T3 & T4 & T5 & T6 --> Common
+    Common --> MemClient
+
+    T7 -->|"synthesize=true"| ReasonExt
+    T8 --> ReasonExt
+
+    ReasonExt --> BamlClient
+    BamlExt --> BamlClient
+    BamlClient --> BReason & BExtract
+    BReason & BExtract --> BClients
+    BClients --> LLM_API
+    BGen --> BamlClient
+
+    FactoryExt -.->|"patches at startup"| BaseExtract
+
+    Server -->|"lifespan"| Docker
+    Docker --> DockerC
+    DockerC --> Neo4j
+
+    MemClient --> Neo4j
+    MemClient -->|".short_term"| STM_Conv & STM_Msg
+    MemClient -->|".long_term"| LTM_Ent & LTM_Rel & LTM_Pref & LTM_Fact
+    MemClient -->|".reasoning"| RM_Trace & RM_Step & RM_Tool
+
+    Init -.->|"__path__ overlay"| Server
+    Init -.->|"pass-through"| Config & Core & Memory & Graph
+
+    RM_Trace --> RM_Step
+    RM_Step --> RM_Tool
+    STM_Conv --> STM_Msg
+    LTM_Ent --> LTM_Rel
+
+    classDef overlay fill:#e1f5fe,stroke:#0288d1
+    classDef base fill:#f3e5f5,stroke:#7b1fa2
+    classDef infra fill:#e8f5e9,stroke:#388e3c
+    classDef tool fill:#fff3e0,stroke:#f57c00
+    classDef reasoning fill:#fce4ec,stroke:#c62828
+
+    class Server,Common,Docker,FactoryExt,BamlCfg overlay
+    class MemClient,MemSettings,Config,Core,Memory,Graph,BaseExtract,Init base
+    class Neo4j,DockerC,LLM_API infra
+    class T1,T2,T3,T4,T5 tool
+    class T6,T7,T8,ReasonExt,BReason,RM_Trace,RM_Step,RM_Tool,P4 reasoning

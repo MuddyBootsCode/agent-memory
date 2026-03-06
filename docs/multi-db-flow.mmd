@@ -1,0 +1,137 @@
+flowchart TB
+    subgraph USER["User / AI Agent"]
+        Q["Query or Store Request"]
+    end
+
+    subgraph MCP["MCP Tool Layer"]
+        T["MCP Tool Called<br/>(memory_search, memory_store, etc.)"]
+        DB_PARAM{"database param<br/>provided?"}
+    end
+
+    subgraph ROUTING["BAML Query Router"]
+        R["RouteQuery / RouteStorage"]
+        RD["RoutingDecision"]
+        CONF{"Confidence<br/>Check"}
+    end
+
+    subgraph DISAMBIG["Disambiguation Path"]
+        AMB["Return disambiguation options:<br/>- Meeting notes from standups?<br/>- Project status updates?<br/>- Search everything?"]
+        CLARIFY["Calling LLM asks user<br/>to clarify"]
+        RECALL["Re-call tool with<br/>database= explicit"]
+    end
+
+    subgraph REGISTRY["Client Registry (Lifespan)"]
+        CR["ClientRegistry Dict"]
+        CG["MemoryClient<br/>db: neo4j (general)"]
+        CM["MemoryClient<br/>db: meetings"]
+        CP["MemoryClient<br/>db: projects"]
+        CRS["MemoryClient<br/>db: research"]
+    end
+
+    subgraph QUALITY["Result Quality Layer"]
+        MERGE["Merge & Deduplicate<br/>Results"]
+        RERANK_CHECK{"Fan-out with<br/>>3 results?"}
+        RERANK["BAML RerankResults<br/>Score relevance 0-1<br/>Filter noise"]
+    end
+
+    subgraph NEO4J["Neo4j 5 Enterprise Instance"]
+        subgraph DB_SYS["system database"]
+            INIT["CREATE DATABASE IF NOT EXISTS<br/>(Docker init + lifespan fallback)"]
+        end
+        subgraph DB_GEN["general (neo4j)"]
+            GE["Entities (POLE+O)"]
+            GM["Messages / Facts"]
+            GP["Preferences"]
+            GT["Reasoning Traces"]
+            PROXY["Proxy Nodes<br/>{vertical: 'meetings',<br/>external_id: 'uuid-123'}"]
+        end
+        subgraph DB_MEET["meetings"]
+            ME["Meeting, Attendee,<br/>ActionItem, Agenda,<br/>Decision"]
+            MR["ATTENDED, ASSIGNED_TO,<br/>DISCUSSED, FOLLOW_UP"]
+        end
+        subgraph DB_PROJ["projects"]
+            PT["Project, Task,<br/>Milestone, Deliverable,<br/>Team"]
+            PR["DEPENDS_ON, BLOCKED_BY,<br/>DELIVERS, PART_OF"]
+        end
+        subgraph DB_RES["research"]
+            RN["Note, Finding,<br/>Source, Topic,<br/>Experiment"]
+            RR["CITES, SUPPORTS,<br/>CONTRADICTS, BUILDS_ON"]
+        end
+    end
+
+    %% Main flow
+    Q --> T
+    T --> DB_PARAM
+
+    %% Explicit database bypass
+    DB_PARAM -->|"Yes"| CR
+    DB_PARAM -->|"No"| R
+
+    %% Routing
+    R --> RD
+    RD --> CONF
+
+    %% Confidence gate
+    CONF -->|"ambiguous=true<br/>low confidence"| AMB
+    CONF -->|"high confidence<br/>single DB"| CR
+    CONF -->|"fan-out<br/>multiple DBs"| CR
+
+    %% Disambiguation loop
+    AMB --> CLARIFY
+    CLARIFY --> RECALL
+    RECALL --> T
+
+    %% Client registry connections
+    CR -.-> CG
+    CR -.-> CM
+    CR -.-> CP
+    CR -.-> CRS
+
+    %% Clients to databases
+    CG --> DB_GEN
+    CM --> DB_MEET
+    CP --> DB_PROJ
+    CRS --> DB_RES
+
+    %% Cross-DB references
+    PROXY -.->|"external_id lookup"| ME
+    PROXY -.->|"external_id lookup"| PT
+    PROXY -.->|"external_id lookup"| RN
+
+    %% Startup flow
+    INIT -.->|"creates on startup"| DB_MEET
+    INIT -.->|"creates on startup"| DB_PROJ
+    INIT -.->|"creates on startup"| DB_RES
+
+    %% Results flow through quality layer
+    CG -->|"results"| MERGE
+    CM -->|"results"| MERGE
+    CP -->|"results"| MERGE
+    CRS -->|"results"| MERGE
+    MERGE --> RERANK_CHECK
+
+    RERANK_CHECK -->|"Yes"| RERANK
+    RERANK_CHECK -->|"No (single DB<br/>or few results)"| T
+
+    RERANK -->|"scored & filtered"| T
+    T -->|"unified response"| Q
+
+    %% Styling
+    classDef router fill:#f9a825,stroke:#f57f17,color:#000
+    classDef client fill:#42a5f5,stroke:#1565c0,color:#fff
+    classDef db fill:#66bb6a,stroke:#2e7d32,color:#fff
+    classDef proxy fill:#ef5350,stroke:#c62828,color:#fff
+    classDef merge fill:#ab47bc,stroke:#6a1b9a,color:#fff
+    classDef tool fill:#78909c,stroke:#37474f,color:#fff
+    classDef disambig fill:#ff8a65,stroke:#d84315,color:#000
+    classDef quality fill:#ab47bc,stroke:#6a1b9a,color:#fff
+    classDef decision fill:#fff176,stroke:#f9a825,color:#000
+
+    class R,RD router
+    class CG,CM,CP,CRS,CR client
+    class DB_GEN,DB_MEET,DB_PROJ,DB_RES db
+    class PROXY proxy
+    class MERGE,RERANK quality
+    class T tool
+    class AMB,CLARIFY,RECALL disambig
+    class CONF,DB_PARAM,RERANK_CHECK decision

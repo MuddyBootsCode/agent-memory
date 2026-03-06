@@ -1,0 +1,88 @@
+// Structured reasoning step extracted from conversation
+class ExtractedReasoningStep {
+  thought string @description("The reasoning or hypothesis behind the action — WHY it was done")
+  action string @description("What action was taken or decision made")
+  observation string @description("What was learned or observed from the action")
+  alternatives_considered string? @description("Other approaches that were weighed and rejected")
+  confidence float @description("Confidence in the extraction, 0.0 to 1.0")
+}
+
+class ReasoningExtractionOutput {
+  task string @description("The overall task or question being addressed")
+  steps ExtractedReasoningStep[] @description("The reasoning steps in chronological order")
+  final_conclusion string @description("The final conclusion or answer reached")
+  success bool @description("Whether the task was successfully completed")
+}
+
+function ExtractReasoning(text: string) -> ReasoningExtractionOutput {
+  client Anthropic
+  prompt #"
+    Analyze the following conversation or text and extract the reasoning chain.
+
+    Identify:
+    1. What task or question was being addressed
+    2. Each reasoning step: what was the hypothesis/thought, what action was taken,
+       what was observed/learned, and what alternatives were considered
+    3. The final conclusion reached
+    4. Whether the task was successfully completed
+
+    Focus on the REASONING — the "why" behind decisions, not just the "what".
+    Look for:
+    - Hypotheses being formed and tested
+    - Evidence being gathered and interpreted
+    - Decisions between alternatives
+    - Conclusions drawn from observations
+    - Course corrections when initial approaches failed
+
+    ## Text to Analyze
+    {{ text }}
+
+    {{ ctx.output_format }}
+  "#
+}
+
+class ReasoningChainInput {
+  task string @description("The task that was solved")
+  steps ReasoningStepInput[] @description("The reasoning steps taken")
+  outcome string @description("The final outcome")
+}
+
+class ReasoningStepInput {
+  thought string @description("Why this action was chosen")
+  action string @description("What was done")
+  observation string @description("What was learned")
+}
+
+function SynthesizeExplanation(chain: ReasoningChainInput) -> string {
+  client Anthropic
+  prompt #"
+    Given the following reasoning chain from an AI agent's problem-solving process,
+    produce a clear, natural-language explanation of WHY the agent came to its conclusion.
+
+    Write as if answering the question: "Why did you come up with this answer?"
+
+    Focus on:
+    - The key decisions and why they were made
+    - What evidence led to the conclusion
+    - What alternatives were considered and why they were rejected
+    - The logical flow from question to answer
+
+    Be concise but thorough. Use first person ("I").
+
+    ## Task
+    {{ chain.task }}
+
+    ## Reasoning Steps
+    {% for step in chain.steps %}
+    ### Step {{ loop.index }}
+    **Thought**: {{ step.thought }}
+    **Action**: {{ step.action }}
+    **Observation**: {{ step.observation }}
+    {% endfor %}
+
+    ## Outcome
+    {{ chain.outcome }}
+
+    {{ ctx.output_format }}
+  "#
+}
