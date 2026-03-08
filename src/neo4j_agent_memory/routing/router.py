@@ -6,19 +6,17 @@ import asyncio
 import logging
 import os
 import re
+import time
 from typing import Any
 
 from cachetools import TTLCache
 
+from neo4j_agent_memory.verticals import get_vertical_to_db
+
 logger = logging.getLogger(__name__)
 
 # Mapping from BAML enum values to Neo4j database names
-VERTICAL_TO_DB: dict[str, str] = {
-    "MEETINGS": "meetings",
-    "PROJECTS": "projects",
-    "RESEARCH": "research",
-    "GENERAL": "neo4j",
-}
+VERTICAL_TO_DB: dict[str, str] = get_vertical_to_db()
 
 # Key normalization: collapse whitespace, strip punctuation, lowercase, truncate
 _NORM_RE = re.compile(r"[^\w\s]")
@@ -119,7 +117,10 @@ class QueryRouter:
             cached = self._query_cache.get(cache_key)
             if cached is not None:
                 self.query_cache_stats.hits += 1
-                logger.debug("Route cache HIT: %s", cache_key[:60])
+                logger.info(
+                    "routing_decision: op=query primary=%s cache=hit input=%s",
+                    cached.primary, query[:80],
+                )
                 return cached
 
             # Coalesce concurrent requests for the same key
@@ -136,11 +137,23 @@ class QueryRouter:
             future = asyncio.get_event_loop().create_future()
             self._query_pending[cache_key] = future
 
+        start_time = time.monotonic()
         try:
             from neo4j_agent_memory.baml_client.async_client import b
 
             decision = await b.RouteQuery(query=query, context=context)
             result = self._to_result(decision)
+
+            elapsed_ms = (time.monotonic() - start_time) * 1000
+            logger.info(
+                "routing_decision: op=query primary=%s targets=%s fanout=%s ambiguous=%s cache=miss latency_ms=%.0f input=%s",
+                result.primary,
+                [(db, round(conf, 2)) for db, conf in result.targets],
+                result.requires_fanout,
+                result.ambiguous,
+                elapsed_ms,
+                query[:80],
+            )
 
             if self._cache_enabled:
                 self._query_cache[cache_key] = result
@@ -185,7 +198,10 @@ class QueryRouter:
             cached = self._storage_cache.get(cache_key)
             if cached is not None:
                 self.storage_cache_stats.hits += 1
-                logger.debug("Storage route cache HIT: %s", cache_key[:60])
+                logger.info(
+                    "routing_decision: op=storage primary=%s cache=hit input=%s",
+                    cached.primary, content[:80],
+                )
                 return cached
 
             # Coalesce concurrent requests for the same key
@@ -202,6 +218,7 @@ class QueryRouter:
             future = asyncio.get_event_loop().create_future()
             self._storage_pending[cache_key] = future
 
+        start_time = time.monotonic()
         try:
             from neo4j_agent_memory.baml_client.async_client import b
 
@@ -211,6 +228,17 @@ class QueryRouter:
                 context=context,
             )
             result = self._to_result(decision)
+
+            elapsed_ms = (time.monotonic() - start_time) * 1000
+            logger.info(
+                "routing_decision: op=storage primary=%s targets=%s fanout=%s ambiguous=%s cache=miss latency_ms=%.0f input=%s",
+                result.primary,
+                [(db, round(conf, 2)) for db, conf in result.targets],
+                result.requires_fanout,
+                result.ambiguous,
+                elapsed_ms,
+                content[:80],
+            )
 
             if self._cache_enabled:
                 self._storage_cache[cache_key] = result

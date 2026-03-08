@@ -311,6 +311,51 @@ class TestRoutingResult:
         assert len(result.disambiguation_options) == 2
 
 
+def _mock_entity(name="Test Entity", entity_type="MEETING", entity_id=None):
+    """Create a mock Entity object as returned by add_entity."""
+    from uuid import UUID, uuid4
+
+    entity = MagicMock()
+    entity.id = UUID(entity_id) if entity_id else uuid4()
+    entity.name = name
+    entity.type = entity_type
+    return entity
+
+
+def _mock_dedup_result(action="none", matched_name=None, score=0.0):
+    """Create a mock DeduplicationResult."""
+    result = MagicMock()
+    result.action = action
+    result.is_duplicate = action in ("merged", "flagged")
+    result.matched_entity_name = matched_name
+    result.matched_entity_id = None
+    result.similarity_score = score
+    result.match_type = None
+    return result
+
+
+def _make_dedup_client(entities_and_results=None):
+    """Create a mock client with add_entity configured.
+
+    Args:
+        entities_and_results: List of (entity, dedup_result) tuples to return
+            sequentially. If None, returns new entities with no dedup.
+    """
+    mock_client = MagicMock()
+    mock_client.graph.execute_write = AsyncMock(return_value=[])
+
+    if entities_and_results:
+        mock_client.long_term.add_entity = AsyncMock(
+            side_effect=entities_and_results
+        )
+    else:
+        async def default_add_entity(name, entity_type, **kwargs):
+            return (_mock_entity(name, entity_type), _mock_dedup_result())
+        mock_client.long_term.add_entity = AsyncMock(side_effect=default_add_entity)
+
+    return mock_client
+
+
 class TestVerticalExtraction:
     """Tests for vertical-specific entity extraction and persistence."""
 
@@ -349,14 +394,10 @@ class TestVerticalExtraction:
 
     @pytest.mark.asyncio
     async def test_persist_vertical_entities_creates_nodes(self):
-        """persist_vertical_entities writes Entity nodes to the graph."""
+        """persist_vertical_entities creates entities via add_entity and links them."""
         from neo4j_agent_memory.extraction.vertical_extractor import persist_vertical_entities
 
-        mock_client = MagicMock()
-        mock_client.graph.execute_write = AsyncMock(return_value=[{"e": {}}])
-        mock_client.graph.execute_read = AsyncMock(return_value=[])
-        mock_client.short_term = MagicMock()
-        mock_client.short_term._embedder = None
+        mock_client = _make_dedup_client()
 
         extraction = {
             "entities": [
@@ -375,21 +416,18 @@ class TestVerticalExtraction:
 
         assert counts["entities"] == 2
         assert counts["relations"] == 0
+        assert mock_client.long_term.add_entity.call_count == 2
 
-        # Verify execute_write was called for entity creation + message linking + domain props
+        # Verify execute_write called for domain props + MENTIONS per entity
         write_calls = mock_client.graph.execute_write.call_args_list
-        assert len(write_calls) >= 4  # 2 entities * (create + link) + domain props
+        assert len(write_calls) == 4  # 2 entities * (domain props SET + MENTIONS)
 
     @pytest.mark.asyncio
     async def test_persist_vertical_entities_creates_relations(self):
         """persist_vertical_entities creates RELATED_TO edges with domain types."""
         from neo4j_agent_memory.extraction.vertical_extractor import persist_vertical_entities
 
-        mock_client = MagicMock()
-        mock_client.graph.execute_write = AsyncMock(return_value=[{"e": {}}])
-        mock_client.graph.execute_read = AsyncMock(return_value=[])
-        mock_client.short_term = MagicMock()
-        mock_client.short_term._embedder = None
+        mock_client = _make_dedup_client()
 
         extraction = {
             "entities": [
@@ -432,10 +470,10 @@ class TestVerticalExtraction:
         from neo4j_agent_memory.extraction.vertical_extractor import persist_vertical_entities
 
         mock_client = MagicMock()
-        mock_client.graph.execute_write = AsyncMock(side_effect=RuntimeError("DB down"))
-        mock_client.graph.execute_read = AsyncMock(return_value=[])
-        mock_client.short_term = MagicMock()
-        mock_client.short_term._embedder = None
+        mock_client.long_term.add_entity = AsyncMock(
+            side_effect=RuntimeError("DB down")
+        )
+        mock_client.graph.execute_write = AsyncMock()
 
         extraction = {
             "entities": [
@@ -460,11 +498,7 @@ class TestVerticalExtraction:
         """Domain-specific fields (status, priority, date) are persisted."""
         from neo4j_agent_memory.extraction.vertical_extractor import persist_vertical_entities
 
-        mock_client = MagicMock()
-        mock_client.graph.execute_write = AsyncMock(return_value=[{"e": {}}])
-        mock_client.graph.execute_read = AsyncMock(return_value=[])
-        mock_client.short_term = MagicMock()
-        mock_client.short_term._embedder = None
+        mock_client = _make_dedup_client()
 
         extraction = {
             "entities": [
@@ -497,6 +531,176 @@ class TestVerticalExtraction:
         assert params["status"] == "blocked"
         assert params["priority"] == "high"
         assert params["vertical_source"] == "projects"
+
+
+class TestVerticalDeduplication:
+    """Tests for entity deduplication within verticals."""
+
+    @pytest.mark.asyncio
+    async def test_merged_entity_uses_existing_id(self):
+        """When add_entity auto-merges, the existing entity ID is used for MENTIONS."""
+        from neo4j_agent_memory.extraction.vertical_extractor import persist_vertical_entities
+
+        existing_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        mock_entity = _mock_entity("Alice Johnson", "ATTENDEE", existing_id)
+        mock_dedup = _mock_dedup_result("merged", "Alice Johnson", 0.97)
+
+        mock_client = _make_dedup_client([(mock_entity, mock_dedup)])
+
+        extraction = {
+            "entities": [{"name": "Alice", "type": "ATTENDEE", "confidence": 0.9}],
+            "relations": [],
+        }
+
+        await persist_vertical_entities(
+            client=mock_client,
+            message_id="msg-200",
+            extraction=extraction,
+            database="meetings",
+        )
+
+        # MENTIONS edge should use the merged entity's ID
+        write_calls = mock_client.graph.execute_write.call_args_list
+        mentions_calls = [
+            c for c in write_calls
+            if len(c.args) > 1 and "entity_id" in (c.args[1] if isinstance(c.args[1], dict) else {})
+        ]
+        assert len(mentions_calls) == 1
+        assert mentions_calls[0].args[1]["entity_id"] == existing_id
+
+    @pytest.mark.asyncio
+    async def test_merged_entity_still_gets_mentions_edge(self):
+        """A merged entity still gets a MENTIONS edge from the new message."""
+        from neo4j_agent_memory.extraction.vertical_extractor import persist_vertical_entities
+
+        existing_id = "11111111-2222-3333-4444-555555555555"
+        mock_entity = _mock_entity("Alice Johnson", "ATTENDEE", existing_id)
+        mock_dedup = _mock_dedup_result("merged", "Alice Johnson", 0.96)
+
+        mock_client = _make_dedup_client([(mock_entity, mock_dedup)])
+
+        extraction = {
+            "entities": [{"name": "Alice", "type": "ATTENDEE", "confidence": 0.9}],
+            "relations": [],
+        }
+
+        counts = await persist_vertical_entities(
+            client=mock_client,
+            message_id="msg-300",
+            extraction=extraction,
+            database="meetings",
+        )
+
+        assert counts["entities"] == 1
+        # Domain props SET + MENTIONS edge
+        assert mock_client.graph.execute_write.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_dedup_stats_in_return_value(self):
+        """Return dict includes merged and flagged counts."""
+        from neo4j_agent_memory.extraction.vertical_extractor import persist_vertical_entities
+
+        mock_client = _make_dedup_client([
+            (_mock_entity("Alice", "ATTENDEE"), _mock_dedup_result("merged", "Alice Johnson", 0.97)),
+            (_mock_entity("Sprint Planning", "MEETING"), _mock_dedup_result("none")),
+            (_mock_entity("Q1 Review", "MEETING"), _mock_dedup_result("flagged", "Q1 Planning", 0.88)),
+        ])
+
+        extraction = {
+            "entities": [
+                {"name": "Alice", "type": "ATTENDEE", "confidence": 0.9},
+                {"name": "Sprint Planning", "type": "MEETING", "confidence": 0.95},
+                {"name": "Q1 Review", "type": "MEETING", "confidence": 0.85},
+            ],
+            "relations": [],
+        }
+
+        counts = await persist_vertical_entities(
+            client=mock_client,
+            message_id="msg-400",
+            extraction=extraction,
+            database="meetings",
+        )
+
+        assert counts["entities"] == 3
+        assert counts["merged"] == 1
+        assert counts["flagged"] == 1
+
+    @pytest.mark.asyncio
+    async def test_domain_props_set_on_merged_entity(self):
+        """Domain properties are updated even when entity was merged."""
+        from neo4j_agent_memory.extraction.vertical_extractor import persist_vertical_entities
+
+        existing_id = "aaaaaaaa-1111-2222-3333-444444444444"
+        mock_entity = _mock_entity("Auth Migration", "TASK", existing_id)
+        mock_dedup = _mock_dedup_result("merged", "Auth Migration Task", 0.98)
+
+        mock_client = _make_dedup_client([(mock_entity, mock_dedup)])
+
+        extraction = {
+            "entities": [
+                {
+                    "name": "Auth Migration",
+                    "type": "TASK",
+                    "confidence": 0.9,
+                    "status": "blocked",
+                    "priority": "high",
+                },
+            ],
+            "relations": [],
+        }
+
+        await persist_vertical_entities(
+            client=mock_client,
+            message_id="msg-500",
+            extraction=extraction,
+            database="projects",
+        )
+
+        # Domain props SET should use the merged entity's ID
+        write_calls = mock_client.graph.execute_write.call_args_list
+        domain_calls = [
+            c for c in write_calls
+            if len(c.args) > 1 and "vertical_source" in (c.args[1] if isinstance(c.args[1], dict) else {})
+        ]
+        assert len(domain_calls) == 1
+        params = domain_calls[0].args[1]
+        assert params["id"] == existing_id
+        assert params["status"] == "blocked"
+        assert params["priority"] == "high"
+        assert params["vertical_source"] == "projects"
+
+
+class TestVerticalRegistry:
+    """Tests for the centralized vertical registry."""
+
+    def test_vertical_registry_consistency(self):
+        """Registry produces the same mappings as the old hardcoded dicts."""
+        from neo4j_agent_memory.verticals import (
+            VERTICALS,
+            get_default_vertical_names,
+            get_vertical_extractors,
+            get_vertical_to_db,
+        )
+
+        # All three verticals registered
+        assert set(VERTICALS.keys()) == {"meetings", "projects", "research"}
+
+        # DB mapping includes GENERAL
+        db_map = get_vertical_to_db()
+        assert db_map["MEETINGS"] == "meetings"
+        assert db_map["PROJECTS"] == "projects"
+        assert db_map["RESEARCH"] == "research"
+        assert db_map["GENERAL"] == "neo4j"
+
+        # Extractor mapping
+        extractors = get_vertical_extractors()
+        assert extractors["meetings"] == "ExtractMeetingEntities"
+        assert extractors["projects"] == "ExtractProjectEntities"
+        assert extractors["research"] == "ExtractResearchEntities"
+
+        # Default names
+        assert get_default_vertical_names() == ["meetings", "projects", "research"]
 
 
 class TestRoutingCache:
@@ -672,6 +876,45 @@ class TestRoutingCache:
         k2 = _normalize_key("standup  notes")
         k3 = _normalize_key("STANDUP NOTES??")
         assert k1 == k2 == k3
+
+    @pytest.mark.asyncio
+    async def test_route_query_logs_decision(self):
+        """Routing decision is logged at INFO level on cache miss."""
+        router = self._make_router()
+        decision = self._mock_decision("MEETINGS")
+
+        with patch(
+            "neo4j_agent_memory.baml_client.async_client.b.RouteQuery",
+            new_callable=AsyncMock,
+            return_value=decision,
+        ):
+            with patch("neo4j_agent_memory.routing.router.logger") as mock_logger:
+                await router.route_query("standup notes")
+                info_calls = [
+                    c for c in mock_logger.info.call_args_list
+                    if "routing_decision" in str(c)
+                ]
+                assert len(info_calls) >= 1
+
+    @pytest.mark.asyncio
+    async def test_route_query_logs_cache_hit(self):
+        """Routing decision is logged at INFO level on cache hit."""
+        router = self._make_router()
+        decision = self._mock_decision("MEETINGS")
+
+        with patch(
+            "neo4j_agent_memory.baml_client.async_client.b.RouteQuery",
+            new_callable=AsyncMock,
+            return_value=decision,
+        ):
+            with patch("neo4j_agent_memory.routing.router.logger") as mock_logger:
+                await router.route_query("standup notes")
+                await router.route_query("standup notes")
+                info_calls = [
+                    c for c in mock_logger.info.call_args_list
+                    if "routing_decision" in str(c) and "cache=hit" in str(c)
+                ]
+                assert len(info_calls) >= 1
 
     @pytest.mark.asyncio
     async def test_fallback_on_error_still_caches_nothing(self):

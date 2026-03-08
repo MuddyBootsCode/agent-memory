@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 import os
 
+from neo4j_agent_memory.verticals import get_default_vertical_names
+
 logger = logging.getLogger(__name__)
 
 
@@ -13,7 +15,7 @@ def get_configured_verticals() -> list[str]:
     env_val = os.environ.get("NAM_VERTICALS", "")
     if env_val.strip():
         return [v.strip() for v in env_val.split(",") if v.strip()]
-    return ["meetings", "projects", "research"]
+    return get_default_vertical_names()
 
 
 async def ensure_databases_exist(driver) -> list[str]:

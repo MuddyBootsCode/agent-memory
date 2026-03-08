@@ -4,16 +4,13 @@ from __future__ import annotations
 
 import logging
 from typing import Any
-from uuid import uuid4
+
+from neo4j_agent_memory.verticals import get_vertical_extractors
 
 logger = logging.getLogger(__name__)
 
 # Maps database name to BAML extraction function name
-VERTICAL_EXTRACTORS = {
-    "meetings": "ExtractMeetingEntities",
-    "projects": "ExtractProjectEntities",
-    "research": "ExtractResearchEntities",
-}
+VERTICAL_EXTRACTORS = get_vertical_extractors()
 
 
 async def extract_for_vertical(
@@ -96,67 +93,70 @@ async def persist_vertical_entities(
     Returns:
         Dict with 'entities' and 'relations' counts.
     """
-    from neo4j_agent_memory.graph.query_builder import build_create_entity_query
-
     entities_stored = 0
     relations_stored = 0
+    merged_count = 0
+    flagged_count = 0
     entity_name_to_id: dict[str, str] = {}
 
     for entity in extraction.get("entities", []):
-        entity_id = str(uuid4())
         entity_type = entity["type"]
         entity_name = entity["name"]
+        confidence = max(0.0, min(1.0, entity.get("confidence", 0.8)))
 
         try:
-            create_query = build_create_entity_query(entity_type, None)
-            await client.graph.execute_write(
-                create_query,
-                {
-                    "id": entity_id,
-                    "name": entity_name,
-                    "type": entity_type,
-                    "subtype": None,
-                    "canonical_name": entity_name,
-                    "description": None,
-                    "embedding": None,
-                    "confidence": max(0.0, min(1.0, entity.get("confidence", 0.8))),
-                    "metadata": None,
-                    "location": None,
-                },
+            # Use base library's add_entity for dedup pipeline
+            stored_entity, dedup_result = await client.long_term.add_entity(
+                name=entity_name,
+                entity_type=entity_type,
+                resolve=True,
+                generate_embedding=True,
+                deduplicate=True,
+                geocode=False,
+                enrich=False,
+                metadata={"confidence": confidence},
             )
 
-            # Set domain-specific properties
-            domain_props = {}
+            entity_id = str(stored_entity.id)
+
+            if dedup_result.action == "merged":
+                merged_count += 1
+                logger.info(
+                    "Vertical entity '%s' merged with existing '%s' (score=%.2f)",
+                    entity_name,
+                    dedup_result.matched_entity_name,
+                    dedup_result.similarity_score,
+                )
+            elif dedup_result.action == "flagged":
+                flagged_count += 1
+
+            # Set domain-specific properties (status, priority, date, vertical_source)
+            domain_props: dict[str, Any] = {"vertical_source": database}
             if entity.get("status"):
                 domain_props["status"] = entity["status"]
             if entity.get("priority"):
                 domain_props["priority"] = entity["priority"]
             if entity.get("date"):
                 domain_props["date"] = entity["date"]
-            domain_props["vertical_source"] = database
 
-            if domain_props:
-                set_clauses = ", ".join(
-                    f"e.{k} = ${k}" for k in domain_props
-                )
-                await client.graph.execute_write(
-                    f"MATCH (e:Entity {{name: $name, type: $type}}) SET {set_clauses}",
-                    {"name": entity_name, "type": entity_type, **domain_props},
-                )
+            set_clauses = ", ".join(f"e.{k} = ${k}" for k in domain_props)
+            await client.graph.execute_write(
+                f"MATCH (e:Entity {{id: $id}}) SET {set_clauses}",
+                {"id": entity_id, **domain_props},
+            )
 
-            # Link to source message
+            # Link to source message (MERGE prevents duplicate edges)
             await client.graph.execute_write(
                 """
                 MATCH (m:Message {id: $message_id})
-                MATCH (e:Entity {name: $name, type: $type})
+                MATCH (e:Entity {id: $entity_id})
                 MERGE (m)-[r:MENTIONS]->(e)
                 ON CREATE SET r.confidence = $confidence
                 """,
                 {
                     "message_id": message_id,
-                    "name": entity_name,
-                    "type": entity_type,
-                    "confidence": entity.get("confidence", 0.8),
+                    "entity_id": entity_id,
+                    "confidence": confidence,
                 },
             )
 
@@ -234,34 +234,14 @@ async def persist_vertical_entities(
                 source_name, relation_type, target_name, e,
             )
 
-    # Backfill embeddings for vertical entities that lack them
-    try:
-        embedder = getattr(client.short_term, "_embedder", None)
-        if embedder and entities_stored > 0:
-            rows = await client.graph.execute_read(
-                """
-                MATCH (m:Message {id: $message_id})-[:MENTIONS]->(e:Entity)
-                WHERE e.embedding IS NULL AND e.vertical_source = $database
-                RETURN e.id AS id, e.name AS name
-                """,
-                {"message_id": message_id, "database": database},
-            )
-            for row in rows:
-                try:
-                    embedding = await embedder.embed(row["name"])
-                    if embedding:
-                        await client.graph.execute_write(
-                            "MATCH (e:Entity {id: $id}) SET e.embedding = $embedding",
-                            {"id": row["id"], "embedding": embedding},
-                        )
-                except Exception:
-                    pass  # Embedding is best-effort
-    except Exception:
-        pass  # Embedding backfill is best-effort
-
     logger.info(
-        "Vertical extraction for '%s': %d entities, %d relations persisted",
-        database, entities_stored, relations_stored,
+        "Vertical extraction for '%s': %d entities (%d merged, %d flagged), %d relations",
+        database, entities_stored, merged_count, flagged_count, relations_stored,
     )
 
-    return {"entities": entities_stored, "relations": relations_stored}
+    return {
+        "entities": entities_stored,
+        "relations": relations_stored,
+        "merged": merged_count,
+        "flagged": flagged_count,
+    }

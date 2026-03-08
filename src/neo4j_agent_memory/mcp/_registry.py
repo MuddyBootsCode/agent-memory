@@ -11,9 +11,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Default vertical databases
-DEFAULT_VERTICALS = ["meetings", "projects", "research"]
-
 
 class ClientRegistry:
     """Manages MemoryClient instances for multiple Neo4j databases.
