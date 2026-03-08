@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+import re
 from typing import Any
+
+from cachetools import TTLCache
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +19,44 @@ VERTICAL_TO_DB: dict[str, str] = {
     "RESEARCH": "research",
     "GENERAL": "neo4j",
 }
+
+# Key normalization: collapse whitespace, strip punctuation, lowercase, truncate
+_NORM_RE = re.compile(r"[^\w\s]")
+_WS_RE = re.compile(r"\s+")
+_MAX_KEY_LEN = 128
+
+
+def _normalize_key(*parts: str | None) -> str:
+    """Build a cache key from input parts.
+
+    Lowercases, strips punctuation, collapses whitespace, and truncates
+    to _MAX_KEY_LEN chars. Readable in logs and sufficient for a 256-entry
+    cache where collision risk is irrelevant.
+    """
+    raw = "|".join(str(p) for p in parts if p is not None)
+    normed = _NORM_RE.sub("", raw.lower())
+    normed = _WS_RE.sub(" ", normed).strip()
+    return normed[:_MAX_KEY_LEN]
+
+
+class CacheStats:
+    """Simple hit/miss/eviction counters for observability."""
+
+    __slots__ = ("hits", "misses", "coalesced")
+
+    def __init__(self) -> None:
+        self.hits = 0
+        self.misses = 0
+        self.coalesced = 0  # requests that awaited an in-flight LLM call
+
+    def to_dict(self) -> dict[str, int]:
+        total = self.hits + self.misses
+        return {
+            "hits": self.hits,
+            "misses": self.misses,
+            "coalesced": self.coalesced,
+            "hit_rate": round(self.hits / total, 3) if total else 0.0,
+        }
 
 
 class QueryRouter:
@@ -30,6 +72,29 @@ class QueryRouter:
         self._enabled = os.environ.get(
             "NAM_ROUTING_ENABLED", "true"
         ).lower() in ("true", "1", "yes")
+
+        # Cache configuration via env vars
+        cache_enabled = os.environ.get(
+            "NAM_ROUTING_CACHE_ENABLED", "true"
+        ).lower() in ("true", "1", "yes")
+        cache_size = int(os.environ.get("NAM_ROUTING_CACHE_SIZE", "256"))
+        cache_ttl = int(os.environ.get("NAM_ROUTING_CACHE_TTL", "300"))
+
+        self._cache_enabled = cache_enabled
+        self._query_cache: TTLCache[str, RoutingResult] = TTLCache(
+            maxsize=cache_size, ttl=cache_ttl
+        )
+        self._storage_cache: TTLCache[str, RoutingResult] = TTLCache(
+            maxsize=cache_size, ttl=cache_ttl
+        )
+
+        # Pending futures for stampede prevention
+        self._query_pending: dict[str, asyncio.Future[RoutingResult]] = {}
+        self._storage_pending: dict[str, asyncio.Future[RoutingResult]] = {}
+
+        # Observability
+        self.query_cache_stats = CacheStats()
+        self.storage_cache_stats = CacheStats()
 
     async def route_query(
         self,
@@ -47,18 +112,54 @@ class QueryRouter:
                 requires_fanout=False,
             )
 
+        cache_key = _normalize_key(query, context)
+
+        # Check cache
+        if self._cache_enabled:
+            cached = self._query_cache.get(cache_key)
+            if cached is not None:
+                self.query_cache_stats.hits += 1
+                logger.debug("Route cache HIT: %s", cache_key[:60])
+                return cached
+
+            # Coalesce concurrent requests for the same key
+            if cache_key in self._query_pending:
+                self.query_cache_stats.coalesced += 1
+                logger.debug("Route cache COALESCE: %s", cache_key[:60])
+                return await asyncio.shield(self._query_pending[cache_key])
+
+        self.query_cache_stats.misses += 1
+
+        # Set up future for stampede prevention
+        future: asyncio.Future[RoutingResult] | None = None
+        if self._cache_enabled:
+            future = asyncio.get_event_loop().create_future()
+            self._query_pending[cache_key] = future
+
         try:
             from neo4j_agent_memory.baml_client.async_client import b
 
             decision = await b.RouteQuery(query=query, context=context)
-            return self._to_result(decision)
+            result = self._to_result(decision)
+
+            if self._cache_enabled:
+                self._query_cache[cache_key] = result
+                if future is not None:
+                    future.set_result(result)
+
+            return result
         except Exception as e:
             logger.warning("Route failed, defaulting to general: %s", e)
-            return RoutingResult(
+            fallback = RoutingResult(
                 targets=[("neo4j", 1.0)],
                 primary="neo4j",
                 requires_fanout=False,
             )
+            if future is not None and not future.done():
+                future.set_result(fallback)
+            return fallback
+        finally:
+            self._query_pending.pop(cache_key, None)
 
     async def route_storage(
         self,
@@ -77,6 +178,30 @@ class QueryRouter:
                 requires_fanout=False,
             )
 
+        cache_key = _normalize_key(content, memory_type, context)
+
+        # Check cache
+        if self._cache_enabled:
+            cached = self._storage_cache.get(cache_key)
+            if cached is not None:
+                self.storage_cache_stats.hits += 1
+                logger.debug("Storage route cache HIT: %s", cache_key[:60])
+                return cached
+
+            # Coalesce concurrent requests for the same key
+            if cache_key in self._storage_pending:
+                self.storage_cache_stats.coalesced += 1
+                logger.debug("Storage route cache COALESCE: %s", cache_key[:60])
+                return await asyncio.shield(self._storage_pending[cache_key])
+
+        self.storage_cache_stats.misses += 1
+
+        # Set up future for stampede prevention
+        future: asyncio.Future[RoutingResult] | None = None
+        if self._cache_enabled:
+            future = asyncio.get_event_loop().create_future()
+            self._storage_pending[cache_key] = future
+
         try:
             from neo4j_agent_memory.baml_client.async_client import b
 
@@ -85,14 +210,26 @@ class QueryRouter:
                 memory_type=memory_type,
                 context=context,
             )
-            return self._to_result(decision)
+            result = self._to_result(decision)
+
+            if self._cache_enabled:
+                self._storage_cache[cache_key] = result
+                if future is not None:
+                    future.set_result(result)
+
+            return result
         except Exception as e:
             logger.warning("Storage route failed, defaulting to general: %s", e)
-            return RoutingResult(
+            fallback = RoutingResult(
                 targets=[("neo4j", 1.0)],
                 primary="neo4j",
                 requires_fanout=False,
             )
+            if future is not None and not future.done():
+                future.set_result(fallback)
+            return fallback
+        finally:
+            self._storage_pending.pop(cache_key, None)
 
     def _to_result(self, decision) -> RoutingResult:
         """Convert BAML RoutingDecision to internal RoutingResult."""
@@ -211,3 +348,15 @@ class RoutingResult:
     def primary_database(self) -> str:
         """The single most relevant database."""
         return self.primary
+
+    def to_metadata(self) -> dict:
+        """Serialize routing decision as metadata for tool responses."""
+        return {
+            "targets": [
+                {"database": db, "confidence": round(conf, 3)}
+                for db, conf in self.targets
+            ],
+            "primary": self.primary,
+            "requires_fanout": self.requires_fanout,
+            "ambiguous": self.ambiguous,
+        }

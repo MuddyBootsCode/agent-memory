@@ -80,43 +80,230 @@ function RouteStorage(content: string, memory_type: string, context: string?) ->
   "#
 }
 
-test MeetingQuery {
+// ═══════════════════════════════════════════════════════════════
+// Category 1: Vertical Identification (8 tests)
+// Validates that clear queries route to the correct single vertical
+// ═══════════════════════════════════════════════════════════════
+
+test MeetingQuery_Clear {
   functions [RouteQuery]
   args {
     query "What was discussed in yesterday's standup?"
     context null
   }
+  // Expected: primary_vertical=MEETINGS, ambiguous=false
 }
 
-test CrossDomainQuery {
+test ProjectQuery_Clear {
   functions [RouteQuery]
   args {
-    query "What research findings were presented in the project kickoff meeting?"
+    query "What's the status of the migration project?"
     context null
   }
+  // Expected: primary_vertical=PROJECTS, ambiguous=false
 }
 
-test ProjectStorage {
+test ResearchQuery_Clear {
+  functions [RouteQuery]
+  args {
+    query "What papers did we cite in the NLP analysis?"
+    context null
+  }
+  // Expected: primary_vertical=RESEARCH, ambiguous=false
+}
+
+test GeneralQuery_Clear {
+  functions [RouteQuery]
+  args {
+    query "What's Marcus's email address?"
+    context null
+  }
+  // Expected: primary_vertical=GENERAL, ambiguous=false
+}
+
+test MeetingQuery_Implicit {
+  functions [RouteQuery]
+  args {
+    query "Who attended the sync with DataVault?"
+    context null
+  }
+  // Expected: primary_vertical=MEETINGS, ambiguous=false
+  // "sync" and "attended" are strong meeting signals
+}
+
+test ProjectQuery_Implicit {
+  functions [RouteQuery]
+  args {
+    query "Which tasks are blocked right now?"
+    context null
+  }
+  // Expected: primary_vertical=PROJECTS, ambiguous=false
+  // "tasks" and "blocked" are strong project signals
+}
+
+test ResearchQuery_Implicit {
+  functions [RouteQuery]
+  args {
+    query "What experiments validated the embedding approach?"
+    context null
+  }
+  // Expected: primary_vertical=RESEARCH, ambiguous=false
+  // "experiments" and "validated" are strong research signals
+}
+
+test GeneralQuery_Preference {
+  functions [RouteQuery]
+  args {
+    query "Does Raj prefer Hyatt or Marriott?"
+    context null
+  }
+  // Expected: primary_vertical=GENERAL, ambiguous=false
+  // Personal preferences belong in general memory
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Category 2: Storage Routing (5 tests)
+// Validates that content is routed to the correct vertical for storage
+// ═══════════════════════════════════════════════════════════════
+
+test StoreMeeting {
   functions [RouteStorage]
   args {
-    content "The migration project milestone 2 is delayed by a week due to API dependency"
+    content "Team standup 3/5: Sarah demoed the new dashboard. Marcus raised a blocker on the API integration. Action item: Sarah to send API specs to Marcus by EOD Thursday."
     memory_type "message"
     context null
   }
+  // Expected: primary_vertical=MEETINGS
 }
 
-test AmbiguousQuery {
-  functions [RouteQuery]
+test StoreProject {
+  functions [RouteStorage]
   args {
-    query "What did Sarah say?"
-    context "Sarah presented research findings at Monday's team meeting about the migration project"
+    content "Sprint 12 update: Migration task moved to 'in progress'. Milestone 2 deadline pushed to March 15. The embedding pipeline deliverable is 80% complete. Blocked by: AWS credentials from DataVault."
+    memory_type "message"
+    context null
   }
+  // Expected: primary_vertical=PROJECTS
 }
 
-test VagueQuery {
+test StoreResearch {
+  functions [RouteStorage]
+  args {
+    content "Literature review: Chen et al. 2024 found that graph-based RAG outperforms vector-only retrieval by 23% on multi-hop questions. This supports our hypothesis that knowledge graphs improve agent memory. Need to replicate experiment with our dataset."
+    memory_type "message"
+    context null
+  }
+  // Expected: primary_vertical=RESEARCH
+}
+
+test StoreGeneral {
+  functions [RouteStorage]
+  args {
+    content "Raj Patel is the CTO of DataVault Solutions. He's vegetarian and prefers Hyatt hotels. His email is raj.patel@datavaultsolutions.com."
+    memory_type "message"
+    context null
+  }
+  // Expected: primary_vertical=GENERAL
+  // Personal facts and preferences belong in general memory
+}
+
+test StoreAmbiguousContent {
+  functions [RouteStorage]
+  args {
+    content "Talked to the team today about next steps. Things are going well overall."
+    memory_type "message"
+    context null
+  }
+  // Expected: primary_vertical=GENERAL (fallback for vague content)
+  // Storage should always pick ONE primary, never be ambiguous
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Category 3: Ambiguity Detection (4 tests)
+// Validates that vague queries trigger disambiguation
+// ═══════════════════════════════════════════════════════════════
+
+test AmbiguousQuery_Vague {
   functions [RouteQuery]
   args {
     query "anything new?"
     context null
   }
+  // Expected: ambiguous=true, disambiguation_options populated
+  // Too vague to route confidently to any vertical
+}
+
+test AmbiguousQuery_PersonRef {
+  functions [RouteQuery]
+  args {
+    query "What did Sarah say?"
+    context null
+  }
+  // Expected: ambiguous=true
+  // Sarah could have said something in a meeting, project update, or research context
+}
+
+test AmbiguousQuery_WithContext {
+  functions [RouteQuery]
+  args {
+    query "What did Sarah say?"
+    context "Sarah presented research findings at Monday's team meeting about the migration project"
+  }
+  // Expected: ambiguous=false, requires_fanout likely true
+  // Context disambiguates — mentions meeting, research, and project
+}
+
+test AmbiguousQuery_Temporal {
+  functions [RouteQuery]
+  args {
+    query "what happened last week?"
+    context null
+  }
+  // Expected: ambiguous=true, disambiguation_options populated
+  // Pure temporal reference without domain specificity
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Category 4: Cross-Domain / Fanout (4 tests)
+// Validates that multi-domain queries correctly trigger fanout
+// ═══════════════════════════════════════════════════════════════
+
+test CrossDomain_MeetingResearch {
+  functions [RouteQuery]
+  args {
+    query "What research findings were presented in the project kickoff meeting?"
+    context null
+  }
+  // Expected: requires_fanout=true, targets include MEETINGS and RESEARCH
+  // Explicitly references both meeting context and research content
+}
+
+test CrossDomain_ProjectMeeting {
+  functions [RouteQuery]
+  args {
+    query "What action items came out of the sprint planning meeting?"
+    context null
+  }
+  // Expected: targets include MEETINGS (and possibly PROJECTS)
+  // "action items" + "sprint planning" + "meeting" spans meetings/projects
+}
+
+test CrossDomain_AllVerticals {
+  functions [RouteQuery]
+  args {
+    query "Give me everything we know about the DataVault migration"
+    context null
+  }
+  // Expected: requires_fanout=true, multiple targets
+  // "everything" is a strong fanout signal across all verticals
+}
+
+test CrossDomain_ResearchProject {
+  functions [RouteQuery]
+  args {
+    query "Which experiments are blocking the ML pipeline deliverable?"
+    context null
+  }
+  // Expected: requires_fanout=true, targets include RESEARCH and PROJECTS
+  // "experiments" → RESEARCH, "deliverable" + "blocking" → PROJECTS
 }

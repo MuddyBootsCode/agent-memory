@@ -277,12 +277,16 @@ def register_tools(mcp: FastMCP) -> None:
             logger.error(f"Error in memory_search: {e}")
             return json.dumps({"error": str(e)})
 
-        return json.dumps({
+        response = {
             "results": merged,
             "query": query,
             "databases_searched": target_dbs,
             "reranked": reranked,
-        }, default=str)
+        }
+        if route:
+            response["routing"] = route.to_metadata()
+
+        return json.dumps(response, default=str)
 
     @mcp.tool()
     async def memory_store(
@@ -322,6 +326,7 @@ def register_tools(mcp: FastMCP) -> None:
         router = get_router(ctx)
 
         # Route to target database
+        route = None
         if database:
             target_db = database
         else:
@@ -359,6 +364,28 @@ def register_tools(mcp: FastMCP) -> None:
                     client, str(message.id)
                 )
 
+                # Run vertical-specific extraction for domain databases
+                vertical_counts = None
+                if target_db != "neo4j":
+                    try:
+                        from neo4j_agent_memory.extraction.vertical_extractor import (
+                            extract_for_vertical,
+                            persist_vertical_entities,
+                        )
+
+                        vertical_extraction = await extract_for_vertical(content, target_db)
+                        if vertical_extraction:
+                            vertical_counts = await persist_vertical_entities(
+                                client=client,
+                                message_id=str(message.id),
+                                extraction=vertical_extraction,
+                                database=target_db,
+                            )
+                    except Exception as vert_err:
+                        logger.warning(
+                            "Vertical extraction failed for %s: %s", target_db, vert_err
+                        )
+
                 stored_id = str(message.id)
                 stored_name = content[:80]
                 result_data = {
@@ -369,6 +396,11 @@ def register_tools(mcp: FastMCP) -> None:
                     "entities_embedded": embedded_count,
                     "database": target_db,
                 }
+
+                if vertical_counts:
+                    result_data["vertical_entities"] = vertical_counts["entities"]
+                    result_data["vertical_relations"] = vertical_counts["relations"]
+                    result_data["vertical_ontology"] = target_db
 
             elif memory_type == "preference":
                 if not category:
@@ -430,6 +462,9 @@ def register_tools(mcp: FastMCP) -> None:
                 except Exception as proxy_err:
                     logger.warning("Proxy creation failed: %s", proxy_err)
 
+            if route and result_data:
+                result_data["routing"] = route.to_metadata()
+
             return json.dumps(result_data)
 
         except Exception as e:
@@ -456,6 +491,7 @@ def register_tools(mcp: FastMCP) -> None:
         Set database explicitly to search a specific vertical.
         """
         # Determine which databases to search
+        route = None
         try:
             registry = get_registry(ctx)
             if database:
@@ -532,6 +568,9 @@ def register_tools(mcp: FastMCP) -> None:
                     except Exception as proxy_err:
                         logger.debug("Proxy resolution skipped: %s", proxy_err)
 
+                if route:
+                    result["routing"] = route.to_metadata()
+
                 return json.dumps(result, default=str)
 
             entity = entities[0]
@@ -566,6 +605,9 @@ def register_tools(mcp: FastMCP) -> None:
                         result["cross_references"] = cross_refs
                 except Exception as proxy_err:
                     logger.debug("Proxy resolution skipped: %s", proxy_err)
+
+            if route:
+                result["routing"] = route.to_metadata()
 
             return json.dumps(result, default=str)
 
