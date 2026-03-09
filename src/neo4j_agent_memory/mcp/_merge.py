@@ -33,11 +33,15 @@ def merge_search_results(
                 item["_source_db"] = db_name
                 merged[memory_type].append(item)
 
-    # Sort each list by similarity/confidence if available
+    # Sort each list: active facts first, then by similarity/confidence
     for memory_type in merged:
         merged[memory_type].sort(
-            key=lambda x: x.get("similarity") or x.get("confidence") or 0,
-            reverse=True,
+            key=lambda x: (
+                # Active facts first (temporal_status="active" or no status)
+                0 if x.get("temporal_status", "active") == "active" else 1,
+                # Then by similarity/confidence descending
+                -(x.get("similarity") or x.get("confidence") or 0),
+            ),
         )
 
     return merged

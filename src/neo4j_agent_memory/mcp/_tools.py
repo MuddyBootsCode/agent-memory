@@ -118,12 +118,15 @@ def register_tools(mcp: FastMCP) -> None:
         session_id: str | None = None,
         threshold: float = 0.7,
         database: str | None = None,
+        graph_augment: bool = True,
+        include_expired: bool = True,
     ) -> str:
         """Search across all memory types using hybrid vector + graph search.
 
-        Automatically routes to the most relevant database(s) using AI classification.
-        Set database explicitly to target a specific vertical (meetings, projects,
-        research, or neo4j for general).
+        Searches messages, entities, preferences, traces, and facts using
+        vector similarity. Automatically routes to the most relevant database(s)
+        using AI classification. Set database explicitly to target a specific
+        vertical (meetings, projects, research, or neo4j for general).
 
         If the query is ambiguous, returns disambiguation options instead of results
         so the calling LLM can ask the user for clarification.
@@ -134,6 +137,10 @@ def register_tools(mcp: FastMCP) -> None:
             MATCH (a:Entity)-[r:RELATED_TO]->(b:Entity)
             WHERE r.relation_type = "WORKS_AT"
             RETURN a.name, r.relation_type, b.name
+
+        Args:
+            include_expired: If True (default), include expired/superseded facts
+                (annotated with temporal_status). Set False to hide expired facts.
         """
         from neo4j_agent_memory.mcp._merge import merge_search_results
 
@@ -167,7 +174,7 @@ def register_tools(mcp: FastMCP) -> None:
             target_dbs = route.target_databases
 
         if memory_types is None:
-            memory_types = ["messages", "entities", "preferences", "traces"]
+            memory_types = ["messages", "entities", "preferences", "traces", "facts"]
 
         # Step 3: Search function to run per-database
         async def _search_db(client, db_name):
@@ -240,6 +247,92 @@ def register_tools(mcp: FastMCP) -> None:
                     for trace in traces
                 ]
 
+            if "facts" in memory_types:
+                try:
+                    from datetime import datetime as _dt
+                    from datetime import timezone as _tz
+
+                    facts = await client.long_term.search_facts(
+                        query=query,
+                        limit=limit,
+                        threshold=threshold,
+                    )
+
+                    now_epoch = int(_dt.now(_tz.utc).timestamp() * 1000)
+
+                    fact_results = []
+                    for fact in facts:
+                        valid_until_val = None
+                        if fact.valid_until:
+                            if isinstance(fact.valid_until, (int, float)):
+                                valid_until_val = fact.valid_until
+                            else:
+                                valid_until_val = fact.valid_until.isoformat()
+
+                        valid_from_val = None
+                        if fact.valid_from:
+                            if isinstance(fact.valid_from, (int, float)):
+                                valid_from_val = fact.valid_from
+                            else:
+                                valid_from_val = fact.valid_from.isoformat()
+
+                        # Determine temporal status
+                        is_expired = False
+                        if valid_until_val is not None:
+                            if isinstance(valid_until_val, (int, float)):
+                                is_expired = valid_until_val <= now_epoch
+                            elif isinstance(valid_until_val, str):
+                                is_expired = True  # If valid_until is set as string, treat as expired
+
+                        temporal_status = "active"
+                        if is_expired:
+                            temporal_status = "expired"
+
+                        superseded_by = getattr(fact, "superseded_by", None)
+                        if superseded_by is None and fact.metadata:
+                            superseded_by = fact.metadata.get("superseded_by")
+
+                        fact_results.append({
+                            "id": str(fact.id),
+                            "subject": fact.subject,
+                            "predicate": fact.predicate,
+                            "object": fact.object,
+                            "confidence": fact.confidence,
+                            "similarity": fact.metadata.get("similarity") if fact.metadata else None,
+                            "valid_from": valid_from_val,
+                            "valid_until": valid_until_val,
+                            "temporal_status": temporal_status,
+                            "superseded_by": superseded_by,
+                        })
+
+                    # Sort: active facts first, then by confidence/similarity
+                    fact_results.sort(
+                        key=lambda f: (
+                            0 if f["temporal_status"] == "active" else 1,
+                            -(f.get("similarity") or f.get("confidence") or 0),
+                        )
+                    )
+
+                    if not include_expired:
+                        fact_results = [f for f in fact_results if f["temporal_status"] == "active"]
+
+                    results["facts"] = fact_results
+                except AttributeError:
+                    # Older versions of the upstream library may not have search_facts
+                    logger.debug("search_facts not available on this client")
+                    results["facts"] = []
+
+            # Graph augmentation — attach neighbors/mentions to vector results
+            if graph_augment:
+                if "entities" in results and results["entities"]:
+                    results["entities"] = await _augment_entities_with_neighbors(
+                        client, results["entities"]
+                    )
+                if "messages" in results and results["messages"]:
+                    results["messages"] = await _augment_messages_with_mentions(
+                        client, results["messages"]
+                    )
+
             return results
 
         try:
@@ -282,6 +375,7 @@ def register_tools(mcp: FastMCP) -> None:
             "query": query,
             "databases_searched": target_dbs,
             "reranked": reranked,
+            "graph_augmented": graph_augment,
         }
         if route:
             response["routing"] = route.to_metadata()
@@ -299,6 +393,10 @@ def register_tools(mcp: FastMCP) -> None:
         subject: str | None = None,
         predicate: str | None = None,
         object_value: str | None = None,
+        valid_from: str | None = None,
+        valid_until: str | None = None,
+        confidence: float = 1.0,
+        supersedes: str | None = None,
         metadata: dict[str, Any] | None = None,
         database: str | None = None,
     ) -> str:
@@ -320,6 +418,10 @@ def register_tools(mcp: FastMCP) -> None:
             subject: Fact subject (required for fact type).
             predicate: Fact predicate/relationship (required for fact type).
             object_value: Fact object (required for fact type).
+            valid_from: When this fact became true (ISO 8601). Defaults to now.
+            valid_until: When this fact stops being true (ISO 8601). None = still true.
+            confidence: Fact confidence score from 0.0 to 1.0 (default: 1.0).
+            supersedes: ID of an existing fact this one replaces. Sets valid_until on the old fact.
             metadata: Optional metadata to attach.
             database: Target database vertical. If None, auto-routed by AI.
         """
@@ -427,12 +529,72 @@ def register_tools(mcp: FastMCP) -> None:
                         {"error": "subject, predicate, and object_value required for fact storage"}
                     )
 
+                # Parse temporal params
+                from neo4j_agent_memory.temporal.lifecycle import (
+                    parse_iso_datetime,
+                    supersede_fact_by_id,
+                    supersede_matching_facts,
+                )
+
+                parsed_valid_from = parse_iso_datetime(valid_from)
+                parsed_valid_until = parse_iso_datetime(valid_until)
+
+                # Attempt temporal extraction from content if valid_from not provided
+                import os
+                if parsed_valid_from is None and os.environ.get("NAM_TEMPORAL_EXTRACTION", "true").lower() != "false":
+                    try:
+                        from neo4j_agent_memory.temporal.extraction import extract_temporal_context
+
+                        temporal_ctx = await extract_temporal_context(content)
+                        if temporal_ctx["valid_at"]:
+                            parsed_valid_from = parse_iso_datetime(temporal_ctx["valid_at"])
+                        if temporal_ctx.get("temporal_qualifier"):
+                            if metadata is None:
+                                metadata = {}
+                            metadata["temporal_qualifier"] = temporal_ctx["temporal_qualifier"]
+                            metadata["is_current_state"] = temporal_ctx["is_current_state"]
+                    except Exception:
+                        pass  # Non-critical — proceed without temporal extraction
+
+                # Store fact with temporal params
                 fact = await client.long_term.add_fact(
                     subject=subject,
                     predicate=predicate,
                     obj=object_value,
+                    confidence=confidence,
+                    valid_from=parsed_valid_from,
+                    valid_until=parsed_valid_until,
                 )
-                stored_id = str(fact.id) if hasattr(fact, "id") else None
+
+                fact_id = str(fact.id) if hasattr(fact, "id") else None
+
+                # Supersede old facts with same subject+predicate (excluding this new one)
+                superseded_count = 0
+                if fact_id:
+                    if supersedes:
+                        # Explicit supersession
+                        superseded_count = await supersede_fact_by_id(
+                            client, supersedes, fact_id
+                        )
+                    else:
+                        # Auto-supersede: invalidate older facts with same subject+predicate
+                        superseded_count = await supersede_matching_facts(
+                            client, subject, predicate, fact_id
+                        )
+
+                # Phase 2: LLM contradiction detection (semantic, beyond SPO match)
+                contradiction_result = None
+                if fact_id and os.environ.get("NAM_CONTRADICTION_DETECTION", "true").lower() != "false":
+                    try:
+                        from neo4j_agent_memory.temporal.contradiction import detect_and_invalidate
+
+                        contradiction_result = await detect_and_invalidate(
+                            client, subject, predicate, object_value, fact_id
+                        )
+                    except Exception as contradiction_err:
+                        logger.warning("Contradiction detection failed: %s", contradiction_err)
+
+                stored_id = fact_id
                 stored_name = f"{subject} -> {predicate} -> {object_value}"
                 result_data = {
                     "stored": True,
@@ -440,7 +602,20 @@ def register_tools(mcp: FastMCP) -> None:
                     "id": stored_id,
                     "triple": stored_name,
                     "database": target_db,
+                    "confidence": confidence,
+                    "valid_from": valid_from,
+                    "valid_until": valid_until,
+                    "superseded_facts": superseded_count,
                 }
+
+                if contradiction_result:
+                    result_data["contradiction_detection"] = {
+                        "candidates_found": contradiction_result["candidates_found"],
+                        "contradictions_detected": contradiction_result["contradictions_detected"],
+                        "facts_invalidated": contradiction_result["facts_invalidated"],
+                        "type": contradiction_result["contradiction_type"],
+                        "reasoning": contradiction_result["reasoning"],
+                    }
 
             else:
                 return json.dumps({"error": f"Unknown memory type: {memory_type}"})
@@ -690,6 +865,14 @@ def register_tools(mcp: FastMCP) -> None:
         - Messages link to entities via :MENTIONS relationships
         - Conversations link to messages via :HAS_MESSAGE, :FIRST_MESSAGE, :NEXT_MESSAGE
         - Facts are stored as :Fact nodes with subject, predicate, object properties
+          Fact nodes include temporal properties:
+            - valid_from: When the fact became true (epoch millis or ISO string)
+            - valid_until: When the fact was superseded (epoch millis, NULL = current)
+            - superseded_by: ID of the fact that replaced this one (NULL = current)
+            - created_at: When the fact was stored
+          Example temporal query:
+            MATCH (f:Fact) WHERE f.subject = 'Alice' AND f.valid_until IS NULL
+            RETURN f.predicate, f.object  // Only current facts about Alice
         - Preferences are :Preference nodes with category and preference properties
         - ReasoningTrace nodes link to :ReasoningStep via :HAS_STEP, steps link to :ToolCall
         """
@@ -1048,6 +1231,209 @@ def register_tools(mcp: FastMCP) -> None:
             logger.error(f"Error in extract_reasoning: {e}")
             return json.dumps({"error": str(e)})
 
+    @mcp.tool()
+    async def temporal_query(
+        ctx: Context,
+        point_in_time: str,
+        subject: str | None = None,
+        predicate: str | None = None,
+        limit: int = 20,
+        database: str | None = None,
+    ) -> str:
+        """Query facts that were valid at a specific point in time.
+
+        Returns only facts where valid_from <= point_in_time AND
+        (valid_until is NULL or valid_until > point_in_time).
+        Useful for understanding what was true at a past date.
+
+        Args:
+            point_in_time: ISO 8601 datetime to query against.
+            subject: Optional — filter to facts about this subject.
+            predicate: Optional — filter to facts with this predicate.
+            limit: Maximum results (default 20).
+            database: Target database vertical. If None, searches general.
+        """
+        from neo4j_agent_memory.temporal.lifecycle import (
+            parse_iso_datetime,
+            temporal_fact_query,
+        )
+
+        pit = parse_iso_datetime(point_in_time)
+        if not pit:
+            return json.dumps({"error": f"Invalid datetime: {point_in_time}"})
+
+        try:
+            if database:
+                registry = get_registry(ctx)
+                client = registry.get(database)
+            else:
+                client = get_client(ctx)
+        except (RuntimeError, KeyError):
+            client = get_client(ctx)
+
+        try:
+            facts = await temporal_fact_query(
+                client, pit, subject=subject, predicate=predicate, limit=limit
+            )
+            return json.dumps({
+                "point_in_time": point_in_time,
+                "facts": facts,
+                "count": len(facts),
+            }, default=str)
+        except Exception as e:
+            logger.error("temporal_query error: %s", e)
+            return json.dumps({"error": str(e)})
+
+    @mcp.tool()
+    async def fact_evolution(
+        ctx: Context,
+        subject: str,
+        predicate: str | None = None,
+        limit: int = 50,
+        database: str | None = None,
+    ) -> str:
+        """Trace how knowledge about a subject has evolved over time.
+
+        Returns the full version history of facts about a subject,
+        ordered chronologically, showing supersession chains.
+        Useful for understanding how plans, statuses, or relationships changed.
+
+        Args:
+            subject: The entity/subject to trace.
+            predicate: Optional — filter to a specific relationship type.
+            limit: Maximum results (default 50).
+            database: Target database vertical. If None, searches general.
+        """
+        from neo4j_agent_memory.temporal.lifecycle import get_fact_evolution
+
+        try:
+            if database:
+                registry = get_registry(ctx)
+                client = registry.get(database)
+            else:
+                client = get_client(ctx)
+        except (RuntimeError, KeyError):
+            client = get_client(ctx)
+
+        try:
+            evolution = await get_fact_evolution(
+                client, subject, predicate=predicate, limit=limit
+            )
+
+            # Build summary
+            current_facts = [f for f in evolution if f["is_current"]]
+            superseded_facts = [f for f in evolution if not f["is_current"]]
+
+            return json.dumps({
+                "subject": subject,
+                "predicate": predicate,
+                "total_versions": len(evolution),
+                "current_facts": len(current_facts),
+                "superseded_facts": len(superseded_facts),
+                "evolution": evolution,
+            }, default=str)
+        except Exception as e:
+            logger.error("fact_evolution error: %s", e)
+            return json.dumps({"error": str(e)})
+
+    @mcp.tool()
+    async def knowledge_state(
+        ctx: Context,
+        as_of: str,
+        subject: str | None = None,
+        predicate: str | None = None,
+        limit: int = 20,
+        database: str | None = None,
+    ) -> str:
+        """Query what the system knew at a specific point in system time.
+
+        Uses transaction-time filtering: created_at <= as_of AND
+        (expired_at is NULL or expired_at > as_of).
+        Different from temporal_query which uses event time (when facts were true).
+
+        Args:
+            as_of: ISO 8601 datetime — the system time to query.
+            subject: Optional — filter to facts about this subject.
+            predicate: Optional — filter to facts with this predicate.
+            limit: Maximum results (default 20).
+            database: Target database vertical.
+        """
+        from neo4j_agent_memory.temporal.lifecycle import parse_iso_datetime
+
+        as_of_dt = parse_iso_datetime(as_of)
+        if not as_of_dt:
+            return json.dumps({"error": f"Invalid datetime: {as_of}"})
+
+        try:
+            if database:
+                registry = get_registry(ctx)
+                client = registry.get(database)
+            else:
+                client = get_client(ctx)
+        except (RuntimeError, KeyError):
+            client = get_client(ctx)
+
+        as_of_epoch = int(as_of_dt.timestamp() * 1000)
+        params: dict[str, Any] = {"as_of": as_of_epoch, "limit": limit}
+
+        where_clauses = [
+            "f.created_at <= datetime({epochMillis: $as_of})",
+            "(f.expired_at IS NULL OR f.expired_at > $as_of)",
+        ]
+        if subject:
+            where_clauses.append("f.subject = $subject")
+            params["subject"] = subject
+        if predicate:
+            where_clauses.append("f.predicate = $predicate")
+            params["predicate"] = predicate
+
+        where = " AND ".join(where_clauses)
+
+        try:
+            result = await client.graph.execute_read(
+                f"""
+                MATCH (f:Fact)
+                WHERE {where}
+                RETURN f.id AS id,
+                       f.subject AS subject,
+                       f.predicate AS predicate,
+                       f.object AS object,
+                       f.confidence AS confidence,
+                       f.created_at AS created_at,
+                       f.expired_at AS expired_at,
+                       f.valid_from AS valid_from,
+                       f.valid_until AS valid_until
+                ORDER BY f.confidence DESC, f.created_at DESC
+                LIMIT $limit
+                """,
+                params,
+            )
+
+            facts = [
+                {
+                    "id": row["id"],
+                    "subject": row["subject"],
+                    "predicate": row["predicate"],
+                    "object": row["object"],
+                    "confidence": row["confidence"],
+                    "created_at": str(row["created_at"]) if row["created_at"] else None,
+                    "expired_at": str(row["expired_at"]) if row["expired_at"] else None,
+                    "valid_from": str(row["valid_from"]) if row["valid_from"] else None,
+                    "valid_until": str(row["valid_until"]) if row["valid_until"] else None,
+                }
+                for row in result
+            ]
+
+            return json.dumps({
+                "as_of": as_of,
+                "facts": facts,
+                "count": len(facts),
+            }, default=str)
+
+        except Exception as e:
+            logger.error("knowledge_state error: %s", e)
+            return json.dumps({"error": str(e)})
+
 
 async def _get_entity_neighbors(
     client,
@@ -1142,3 +1528,79 @@ async def _get_entity_neighbors(
     except Exception as e:
         logger.debug(f"Error getting neighbors: {e}")
         return []
+
+
+async def _augment_entities_with_neighbors(
+    client,
+    entity_results: list[dict[str, Any]],
+    max_neighbors: int = 5,
+) -> list[dict[str, Any]]:
+    """Attach 1-hop RELATED_TO neighbors to each entity result.
+
+    Adds a 'neighbors' list to each entity dict containing related
+    entities from graph traversal. This provides graph context beyond
+    what vector similarity alone returns.
+
+    Args:
+        client: MemoryClient instance.
+        entity_results: List of entity dicts from vector search.
+        max_neighbors: Max neighbors per entity (keeps response size bounded).
+
+    Returns:
+        The same entity_results list, with 'neighbors' added to each item.
+    """
+    for entity in entity_results:
+        entity_id = entity.get("id")
+        if not entity_id:
+            entity["neighbors"] = []
+            continue
+        try:
+            neighbors = await _get_entity_neighbors(client, entity_id, max_hops=1)
+            entity["neighbors"] = neighbors[:max_neighbors]
+        except Exception:
+            entity["neighbors"] = []
+    return entity_results
+
+
+async def _augment_messages_with_mentions(
+    client,
+    message_results: list[dict[str, Any]],
+    max_mentions: int = 5,
+) -> list[dict[str, Any]]:
+    """Attach entities mentioned by each message via MENTIONS edges.
+
+    Args:
+        client: MemoryClient instance.
+        message_results: List of message dicts from vector search.
+        max_mentions: Max mentioned entities per message.
+
+    Returns:
+        The same message_results list, with 'mentioned_entities' added.
+    """
+    for msg in message_results:
+        msg_id = msg.get("id")
+        if not msg_id:
+            msg["mentioned_entities"] = []
+            continue
+        try:
+            records = await client.graph.execute_read(
+                """
+                MATCH (m:Message {id: $message_id})-[:MENTIONS]->(e:Entity)
+                RETURN e.id AS id, e.name AS name, e.type AS type,
+                       e.description AS description
+                LIMIT $limit
+                """,
+                {"message_id": msg_id, "limit": max_mentions},
+            )
+            msg["mentioned_entities"] = [
+                {
+                    "id": r["id"],
+                    "name": r["name"],
+                    "type": r["type"],
+                    "description": r["description"],
+                }
+                for r in records
+            ]
+        except Exception:
+            msg["mentioned_entities"] = []
+    return message_results

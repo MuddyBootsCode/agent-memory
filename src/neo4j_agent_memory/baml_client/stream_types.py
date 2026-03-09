@@ -23,8 +23,20 @@ class StreamState(BaseModel, typing.Generic[StreamStateValueT]):
     value: StreamStateValueT
     state: typing_extensions.Literal["Pending", "Incomplete", "Complete"]
 # #########################################################################
-# Generated classes (22)
+# Generated classes (25)
 # #########################################################################
+
+class CandidateFact(BaseModel):
+    idx: typing.Optional[int] = Field(default=None, description='Index of this fact in the candidates list')
+    subject: typing.Optional[str] = None
+    predicate: typing.Optional[str] = None
+    object: typing.Optional[str] = None
+    confidence: typing.Optional[float] = None
+
+class ContradictionResult(BaseModel):
+    contradicted_indices: typing.List[int] = Field(description='Indices of candidate facts that are contradicted by the new fact. Empty if no contradictions.')
+    contradiction_type: typing.Optional[str] = Field(default=None, description='Type: \'direct_supersession\' (same subject, updated value), \'negation\' (opposite claim), \'refinement\' (more specific version), or \'none\'')
+    reasoning: typing.Optional[str] = Field(default=None, description='Brief explanation of why these facts are contradicted')
 
 class ExtractedEntity(BaseModel):
     name: typing.Optional[str] = Field(default=None, description='The entity name as it appears in text')
@@ -150,6 +162,11 @@ class ScoredResult(BaseModel):
     relevance: typing.Optional[float] = Field(default=None, description='Relevance to the original query, 0.0 to 1.0')
     keep: typing.Optional[bool] = Field(default=None, description='True if this result is relevant enough to show to the user')
     reasoning: typing.Optional[str] = Field(default=None, description='Brief explanation of relevance assessment')
+
+class TemporalExtraction(BaseModel):
+    valid_at: typing.Optional[str] = Field(default=None, description='Extracted datetime when fact became true, in ISO 8601. E.g., \'2026-03-01T00:00:00Z\'. null if not determinable.')
+    temporal_qualifier: typing.Optional[str] = Field(default=None, description='Temporal qualifier: \'since\', \'until\', \'as_of\', \'formerly\', \'currently\', or null')
+    is_current_state: typing.Optional[bool] = Field(default=None, description='True if this describes the current state of affairs, false if explicitly past tense')
 
 # #########################################################################
 # Generated type aliases (0)

@@ -82,6 +82,21 @@ class BamlAsyncClient:
     def parse_stream(self):
       return self.__llm_stream_parser
 
+    async def DetectContradictions(self, new_fact_subject: str,new_fact_predicate: str,new_fact_object: str,candidates: typing.List["types.CandidateFact"],
+        baml_options: BamlCallOptions = {},
+    ) -> types.ContradictionResult:
+        # Check if on_tick is provided
+        if 'on_tick' in baml_options:
+            # Use streaming internally when on_tick is provided
+            __stream__ = self.stream.DetectContradictions(new_fact_subject=new_fact_subject,new_fact_predicate=new_fact_predicate,new_fact_object=new_fact_object,candidates=candidates,
+                baml_options=baml_options)
+            return await __stream__.get_final_response()
+        else:
+            # Original non-streaming code
+            __result__ = await self.__options.merge_options(baml_options).call_function_async(function_name="DetectContradictions", args={
+                "new_fact_subject": new_fact_subject,"new_fact_predicate": new_fact_predicate,"new_fact_object": new_fact_object,"candidates": candidates,
+            })
+            return typing.cast(types.ContradictionResult, __result__.cast_to(types, types, stream_types, False, __runtime__))
     async def ExtractEntities(self, text: str,entity_types: str,
         baml_options: BamlCallOptions = {},
     ) -> types.ExtractionOutput:
@@ -157,6 +172,21 @@ class BamlAsyncClient:
                 "text": text,
             })
             return typing.cast(types.ResearchExtractionOutput, __result__.cast_to(types, types, stream_types, False, __runtime__))
+    async def ExtractTemporalContext(self, text: str,reference_time: str,
+        baml_options: BamlCallOptions = {},
+    ) -> types.TemporalExtraction:
+        # Check if on_tick is provided
+        if 'on_tick' in baml_options:
+            # Use streaming internally when on_tick is provided
+            __stream__ = self.stream.ExtractTemporalContext(text=text,reference_time=reference_time,
+                baml_options=baml_options)
+            return await __stream__.get_final_response()
+        else:
+            # Original non-streaming code
+            __result__ = await self.__options.merge_options(baml_options).call_function_async(function_name="ExtractTemporalContext", args={
+                "text": text,"reference_time": reference_time,
+            })
+            return typing.cast(types.TemporalExtraction, __result__.cast_to(types, types, stream_types, False, __runtime__))
     async def RerankResults(self, query: str,results: typing.List["types.ResultItem"],
         baml_options: BamlCallOptions = {},
     ) -> types.RerankOutput:
@@ -226,6 +256,18 @@ class BamlStreamClient:
     def __init__(self, options: DoNotUseDirectlyCallManager):
         self.__options = options
 
+    def DetectContradictions(self, new_fact_subject: str,new_fact_predicate: str,new_fact_object: str,candidates: typing.List["types.CandidateFact"],
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.BamlStream[stream_types.ContradictionResult, types.ContradictionResult]:
+        __ctx__, __result__ = self.__options.merge_options(baml_options).create_async_stream(function_name="DetectContradictions", args={
+            "new_fact_subject": new_fact_subject,"new_fact_predicate": new_fact_predicate,"new_fact_object": new_fact_object,"candidates": candidates,
+        })
+        return baml_py.BamlStream[stream_types.ContradictionResult, types.ContradictionResult](
+          __result__,
+          lambda x: typing.cast(stream_types.ContradictionResult, x.cast_to(types, types, stream_types, True, __runtime__)),
+          lambda x: typing.cast(types.ContradictionResult, x.cast_to(types, types, stream_types, False, __runtime__)),
+          __ctx__,
+        )
     def ExtractEntities(self, text: str,entity_types: str,
         baml_options: BamlCallOptions = {},
     ) -> baml_py.BamlStream[stream_types.ExtractionOutput, types.ExtractionOutput]:
@@ -286,6 +328,18 @@ class BamlStreamClient:
           lambda x: typing.cast(types.ResearchExtractionOutput, x.cast_to(types, types, stream_types, False, __runtime__)),
           __ctx__,
         )
+    def ExtractTemporalContext(self, text: str,reference_time: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.BamlStream[stream_types.TemporalExtraction, types.TemporalExtraction]:
+        __ctx__, __result__ = self.__options.merge_options(baml_options).create_async_stream(function_name="ExtractTemporalContext", args={
+            "text": text,"reference_time": reference_time,
+        })
+        return baml_py.BamlStream[stream_types.TemporalExtraction, types.TemporalExtraction](
+          __result__,
+          lambda x: typing.cast(stream_types.TemporalExtraction, x.cast_to(types, types, stream_types, True, __runtime__)),
+          lambda x: typing.cast(types.TemporalExtraction, x.cast_to(types, types, stream_types, False, __runtime__)),
+          __ctx__,
+        )
     def RerankResults(self, query: str,results: typing.List["types.ResultItem"],
         baml_options: BamlCallOptions = {},
     ) -> baml_py.BamlStream[stream_types.RerankOutput, types.RerankOutput]:
@@ -342,6 +396,13 @@ class BamlHttpRequestClient:
     def __init__(self, options: DoNotUseDirectlyCallManager):
         self.__options = options
 
+    async def DetectContradictions(self, new_fact_subject: str,new_fact_predicate: str,new_fact_object: str,candidates: typing.List["types.CandidateFact"],
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.baml_py.HTTPRequest:
+        __result__ = await self.__options.merge_options(baml_options).create_http_request_async(function_name="DetectContradictions", args={
+            "new_fact_subject": new_fact_subject,"new_fact_predicate": new_fact_predicate,"new_fact_object": new_fact_object,"candidates": candidates,
+        }, mode="request")
+        return __result__
     async def ExtractEntities(self, text: str,entity_types: str,
         baml_options: BamlCallOptions = {},
     ) -> baml_py.baml_py.HTTPRequest:
@@ -375,6 +436,13 @@ class BamlHttpRequestClient:
     ) -> baml_py.baml_py.HTTPRequest:
         __result__ = await self.__options.merge_options(baml_options).create_http_request_async(function_name="ExtractResearchEntities", args={
             "text": text,
+        }, mode="request")
+        return __result__
+    async def ExtractTemporalContext(self, text: str,reference_time: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.baml_py.HTTPRequest:
+        __result__ = await self.__options.merge_options(baml_options).create_http_request_async(function_name="ExtractTemporalContext", args={
+            "text": text,"reference_time": reference_time,
         }, mode="request")
         return __result__
     async def RerankResults(self, query: str,results: typing.List["types.ResultItem"],
@@ -413,6 +481,13 @@ class BamlHttpStreamRequestClient:
     def __init__(self, options: DoNotUseDirectlyCallManager):
         self.__options = options
 
+    async def DetectContradictions(self, new_fact_subject: str,new_fact_predicate: str,new_fact_object: str,candidates: typing.List["types.CandidateFact"],
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.baml_py.HTTPRequest:
+        __result__ = await self.__options.merge_options(baml_options).create_http_request_async(function_name="DetectContradictions", args={
+            "new_fact_subject": new_fact_subject,"new_fact_predicate": new_fact_predicate,"new_fact_object": new_fact_object,"candidates": candidates,
+        }, mode="stream")
+        return __result__
     async def ExtractEntities(self, text: str,entity_types: str,
         baml_options: BamlCallOptions = {},
     ) -> baml_py.baml_py.HTTPRequest:
@@ -446,6 +521,13 @@ class BamlHttpStreamRequestClient:
     ) -> baml_py.baml_py.HTTPRequest:
         __result__ = await self.__options.merge_options(baml_options).create_http_request_async(function_name="ExtractResearchEntities", args={
             "text": text,
+        }, mode="stream")
+        return __result__
+    async def ExtractTemporalContext(self, text: str,reference_time: str,
+        baml_options: BamlCallOptions = {},
+    ) -> baml_py.baml_py.HTTPRequest:
+        __result__ = await self.__options.merge_options(baml_options).create_http_request_async(function_name="ExtractTemporalContext", args={
+            "text": text,"reference_time": reference_time,
         }, mode="stream")
         return __result__
     async def RerankResults(self, query: str,results: typing.List["types.ResultItem"],

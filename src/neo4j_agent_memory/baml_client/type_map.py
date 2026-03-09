@@ -16,6 +16,12 @@ from . import stream_types
 
 type_map = {
 
+    "types.CandidateFact": types.CandidateFact,
+    "stream_types.CandidateFact": stream_types.CandidateFact,
+
+    "types.ContradictionResult": types.ContradictionResult,
+    "stream_types.ContradictionResult": stream_types.ContradictionResult,
+
     "types.ExtractedEntity": types.ExtractedEntity,
     "stream_types.ExtractedEntity": stream_types.ExtractedEntity,
 
@@ -81,6 +87,9 @@ type_map = {
 
     "types.ScoredResult": types.ScoredResult,
     "stream_types.ScoredResult": stream_types.ScoredResult,
+
+    "types.TemporalExtraction": types.TemporalExtraction,
+    "stream_types.TemporalExtraction": stream_types.TemporalExtraction,
 
 
     "types.EntityType": types.EntityType,

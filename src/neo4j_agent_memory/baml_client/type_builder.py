@@ -20,7 +20,7 @@ from .globals import DO_NOT_USE_DIRECTLY_UNLESS_YOU_KNOW_WHAT_YOURE_DOING_RUNTIM
 class TypeBuilder(type_builder.TypeBuilder):
     def __init__(self):
         super().__init__(classes=set(
-          ["ExtractedEntity","ExtractedPreference","ExtractedReasoningStep","ExtractedRelation","ExtractionOutput","MeetingEntity","MeetingExtractionOutput","MeetingRelation","ProjectEntity","ProjectExtractionOutput","ProjectRelation","ReasoningChainInput","ReasoningExtractionOutput","ReasoningStepInput","RerankOutput","ResearchEntity","ResearchExtractionOutput","ResearchRelation","ResultItem","RoutingDecision","RoutingTarget","ScoredResult",]
+          ["CandidateFact","ContradictionResult","ExtractedEntity","ExtractedPreference","ExtractedReasoningStep","ExtractedRelation","ExtractionOutput","MeetingEntity","MeetingExtractionOutput","MeetingRelation","ProjectEntity","ProjectExtractionOutput","ProjectRelation","ReasoningChainInput","ReasoningExtractionOutput","ReasoningStepInput","RerankOutput","ResearchEntity","ResearchExtractionOutput","ResearchRelation","ResultItem","RoutingDecision","RoutingTarget","ScoredResult","TemporalExtraction",]
         ), enums=set(
           ["EntityType","MeetingEntityType","ProjectEntityType","QueryVertical","ResearchEntityType",]
         ), runtime=DO_NOT_USE_DIRECTLY_UNLESS_YOU_KNOW_WHAT_YOURE_DOING_RUNTIME)
@@ -51,8 +51,16 @@ class TypeBuilder(type_builder.TypeBuilder):
 
 
     # #########################################################################
-    # Generated classes 22
+    # Generated classes 25
     # #########################################################################
+
+    @property
+    def CandidateFact(self) -> "CandidateFactViewer":
+        return CandidateFactViewer(self)
+
+    @property
+    def ContradictionResult(self) -> "ContradictionResultViewer":
+        return ContradictionResultViewer(self)
 
     @property
     def ExtractedEntity(self) -> "ExtractedEntityViewer":
@@ -141,6 +149,10 @@ class TypeBuilder(type_builder.TypeBuilder):
     @property
     def ScoredResult(self) -> "ScoredResultViewer":
         return ScoredResultViewer(self)
+
+    @property
+    def TemporalExtraction(self) -> "TemporalExtractionViewer":
+        return TemporalExtractionViewer(self)
 
 
 
@@ -416,8 +428,110 @@ class ResearchEntityTypeValues:
 
 
 # #########################################################################
-# Generated classes 22
+# Generated classes 25
 # #########################################################################
+
+class CandidateFactAst:
+    def __init__(self, tb: type_builder.TypeBuilder):
+        _tb = tb._tb # type: ignore (we know how to use this private attribute)
+        self._bldr = _tb.class_("CandidateFact")
+        self._properties: typing.Set[str] = set([  "idx",  "subject",  "predicate",  "object",  "confidence",  ])
+        self._props = CandidateFactProperties(self._bldr, self._properties)
+
+    def type(self) -> baml_py.FieldType:
+        return self._bldr.field()
+
+    @property
+    def props(self) -> "CandidateFactProperties":
+        return self._props
+
+
+class CandidateFactViewer(CandidateFactAst):
+    def __init__(self, tb: type_builder.TypeBuilder):
+        super().__init__(tb)
+
+    
+    def list_properties(self) -> typing.List[typing.Tuple[str, type_builder.ClassPropertyViewer]]:
+        return [(name, type_builder.ClassPropertyViewer(self._bldr.property(name))) for name in self._properties]
+    
+
+
+class CandidateFactProperties:
+    def __init__(self, bldr: baml_py.ClassBuilder, properties: typing.Set[str]):
+        self.__bldr = bldr
+        self.__properties = properties # type: ignore (we know how to use this private attribute) # noqa: F821
+
+    
+    
+    @property
+    def idx(self) -> type_builder.ClassPropertyViewer:
+        return type_builder.ClassPropertyViewer(self.__bldr.property("idx"))
+    
+    @property
+    def subject(self) -> type_builder.ClassPropertyViewer:
+        return type_builder.ClassPropertyViewer(self.__bldr.property("subject"))
+    
+    @property
+    def predicate(self) -> type_builder.ClassPropertyViewer:
+        return type_builder.ClassPropertyViewer(self.__bldr.property("predicate"))
+    
+    @property
+    def object(self) -> type_builder.ClassPropertyViewer:
+        return type_builder.ClassPropertyViewer(self.__bldr.property("object"))
+    
+    @property
+    def confidence(self) -> type_builder.ClassPropertyViewer:
+        return type_builder.ClassPropertyViewer(self.__bldr.property("confidence"))
+    
+    
+
+
+class ContradictionResultAst:
+    def __init__(self, tb: type_builder.TypeBuilder):
+        _tb = tb._tb # type: ignore (we know how to use this private attribute)
+        self._bldr = _tb.class_("ContradictionResult")
+        self._properties: typing.Set[str] = set([  "contradicted_indices",  "contradiction_type",  "reasoning",  ])
+        self._props = ContradictionResultProperties(self._bldr, self._properties)
+
+    def type(self) -> baml_py.FieldType:
+        return self._bldr.field()
+
+    @property
+    def props(self) -> "ContradictionResultProperties":
+        return self._props
+
+
+class ContradictionResultViewer(ContradictionResultAst):
+    def __init__(self, tb: type_builder.TypeBuilder):
+        super().__init__(tb)
+
+    
+    def list_properties(self) -> typing.List[typing.Tuple[str, type_builder.ClassPropertyViewer]]:
+        return [(name, type_builder.ClassPropertyViewer(self._bldr.property(name))) for name in self._properties]
+    
+
+
+class ContradictionResultProperties:
+    def __init__(self, bldr: baml_py.ClassBuilder, properties: typing.Set[str]):
+        self.__bldr = bldr
+        self.__properties = properties # type: ignore (we know how to use this private attribute) # noqa: F821
+
+    
+    
+    @property
+    def contradicted_indices(self) -> type_builder.ClassPropertyViewer:
+        return type_builder.ClassPropertyViewer(self.__bldr.property("contradicted_indices"))
+    
+    @property
+    def contradiction_type(self) -> type_builder.ClassPropertyViewer:
+        return type_builder.ClassPropertyViewer(self.__bldr.property("contradiction_type"))
+    
+    @property
+    def reasoning(self) -> type_builder.ClassPropertyViewer:
+        return type_builder.ClassPropertyViewer(self.__bldr.property("reasoning"))
+    
+    
+
 
 class ExtractedEntityAst:
     def __init__(self, tb: type_builder.TypeBuilder):
@@ -1509,6 +1623,53 @@ class ScoredResultProperties:
     @property
     def reasoning(self) -> type_builder.ClassPropertyViewer:
         return type_builder.ClassPropertyViewer(self.__bldr.property("reasoning"))
+    
+    
+
+
+class TemporalExtractionAst:
+    def __init__(self, tb: type_builder.TypeBuilder):
+        _tb = tb._tb # type: ignore (we know how to use this private attribute)
+        self._bldr = _tb.class_("TemporalExtraction")
+        self._properties: typing.Set[str] = set([  "valid_at",  "temporal_qualifier",  "is_current_state",  ])
+        self._props = TemporalExtractionProperties(self._bldr, self._properties)
+
+    def type(self) -> baml_py.FieldType:
+        return self._bldr.field()
+
+    @property
+    def props(self) -> "TemporalExtractionProperties":
+        return self._props
+
+
+class TemporalExtractionViewer(TemporalExtractionAst):
+    def __init__(self, tb: type_builder.TypeBuilder):
+        super().__init__(tb)
+
+    
+    def list_properties(self) -> typing.List[typing.Tuple[str, type_builder.ClassPropertyViewer]]:
+        return [(name, type_builder.ClassPropertyViewer(self._bldr.property(name))) for name in self._properties]
+    
+
+
+class TemporalExtractionProperties:
+    def __init__(self, bldr: baml_py.ClassBuilder, properties: typing.Set[str]):
+        self.__bldr = bldr
+        self.__properties = properties # type: ignore (we know how to use this private attribute) # noqa: F821
+
+    
+    
+    @property
+    def valid_at(self) -> type_builder.ClassPropertyViewer:
+        return type_builder.ClassPropertyViewer(self.__bldr.property("valid_at"))
+    
+    @property
+    def temporal_qualifier(self) -> type_builder.ClassPropertyViewer:
+        return type_builder.ClassPropertyViewer(self.__bldr.property("temporal_qualifier"))
+    
+    @property
+    def is_current_state(self) -> type_builder.ClassPropertyViewer:
+        return type_builder.ClassPropertyViewer(self.__bldr.property("is_current_state"))
     
     
 

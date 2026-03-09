@@ -23,6 +23,12 @@ class LlmResponseParser:
     def __init__(self, options: DoNotUseDirectlyCallManager):
         self.__options = options
 
+    def DetectContradictions(
+        self, llm_response: str, baml_options: BamlCallOptions = {},
+    ) -> types.ContradictionResult:
+        __result__ = self.__options.merge_options(baml_options).parse_response(function_name="DetectContradictions", llm_response=llm_response, mode="request")
+        return typing.cast(types.ContradictionResult, __result__)
+
     def ExtractEntities(
         self, llm_response: str, baml_options: BamlCallOptions = {},
     ) -> types.ExtractionOutput:
@@ -52,6 +58,12 @@ class LlmResponseParser:
     ) -> types.ResearchExtractionOutput:
         __result__ = self.__options.merge_options(baml_options).parse_response(function_name="ExtractResearchEntities", llm_response=llm_response, mode="request")
         return typing.cast(types.ResearchExtractionOutput, __result__)
+
+    def ExtractTemporalContext(
+        self, llm_response: str, baml_options: BamlCallOptions = {},
+    ) -> types.TemporalExtraction:
+        __result__ = self.__options.merge_options(baml_options).parse_response(function_name="ExtractTemporalContext", llm_response=llm_response, mode="request")
+        return typing.cast(types.TemporalExtraction, __result__)
 
     def RerankResults(
         self, llm_response: str, baml_options: BamlCallOptions = {},
@@ -85,6 +97,12 @@ class LlmStreamParser:
     def __init__(self, options: DoNotUseDirectlyCallManager):
         self.__options = options
 
+    def DetectContradictions(
+        self, llm_response: str, baml_options: BamlCallOptions = {},
+    ) -> stream_types.ContradictionResult:
+        __result__ = self.__options.merge_options(baml_options).parse_response(function_name="DetectContradictions", llm_response=llm_response, mode="stream")
+        return typing.cast(stream_types.ContradictionResult, __result__)
+
     def ExtractEntities(
         self, llm_response: str, baml_options: BamlCallOptions = {},
     ) -> stream_types.ExtractionOutput:
@@ -114,6 +132,12 @@ class LlmStreamParser:
     ) -> stream_types.ResearchExtractionOutput:
         __result__ = self.__options.merge_options(baml_options).parse_response(function_name="ExtractResearchEntities", llm_response=llm_response, mode="stream")
         return typing.cast(stream_types.ResearchExtractionOutput, __result__)
+
+    def ExtractTemporalContext(
+        self, llm_response: str, baml_options: BamlCallOptions = {},
+    ) -> stream_types.TemporalExtraction:
+        __result__ = self.__options.merge_options(baml_options).parse_response(function_name="ExtractTemporalContext", llm_response=llm_response, mode="stream")
+        return typing.cast(stream_types.TemporalExtraction, __result__)
 
     def RerankResults(
         self, llm_response: str, baml_options: BamlCallOptions = {},

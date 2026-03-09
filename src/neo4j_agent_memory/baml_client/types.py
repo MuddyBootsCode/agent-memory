@@ -75,8 +75,20 @@ class ResearchEntityType(str, Enum):
     EXPERIMENT = "EXPERIMENT"
 
 # #########################################################################
-# Generated classes (22)
+# Generated classes (25)
 # #########################################################################
+
+class CandidateFact(BaseModel):
+    idx: int = Field(description='Index of this fact in the candidates list')
+    subject: str
+    predicate: str
+    object: str
+    confidence: float
+
+class ContradictionResult(BaseModel):
+    contradicted_indices: typing.List[int] = Field(description='Indices of candidate facts that are contradicted by the new fact. Empty if no contradictions.')
+    contradiction_type: str = Field(description='Type: \'direct_supersession\' (same subject, updated value), \'negation\' (opposite claim), \'refinement\' (more specific version), or \'none\'')
+    reasoning: str = Field(description='Brief explanation of why these facts are contradicted')
 
 class ExtractedEntity(BaseModel):
     name: str = Field(description='The entity name as it appears in text')
@@ -202,6 +214,11 @@ class ScoredResult(BaseModel):
     relevance: float = Field(description='Relevance to the original query, 0.0 to 1.0')
     keep: bool = Field(description='True if this result is relevant enough to show to the user')
     reasoning: str = Field(description='Brief explanation of relevance assessment')
+
+class TemporalExtraction(BaseModel):
+    valid_at: typing.Optional[str] = Field(default=None, description='Extracted datetime when fact became true, in ISO 8601. E.g., \'2026-03-01T00:00:00Z\'. null if not determinable.')
+    temporal_qualifier: typing.Optional[str] = Field(default=None, description='Temporal qualifier: \'since\', \'until\', \'as_of\', \'formerly\', \'currently\', or null')
+    is_current_state: bool = Field(description='True if this describes the current state of affairs, false if explicitly past tense')
 
 # #########################################################################
 # Generated type aliases (0)

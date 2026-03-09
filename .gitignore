@@ -42,5 +42,9 @@ htmlcov/
 # Documentation (internal)
 docs/
 
+# Timestamped eval results (keep routing_eval_results.csv/json as latest snapshot)
+tests/routing_eval_*_*.csv
+tests/routing_eval_*_*.json
+
 # uv
 .uv/
