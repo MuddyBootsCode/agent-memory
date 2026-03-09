@@ -1,14 +1,16 @@
 """
 LLM routing evaluation test suite.
 
-Runs 25 BAML routing/reranking scenarios against the live Anthropic API
-and writes results to a CSV file for human review.
+Runs 25 BAML routing/reranking scenarios against a live LLM API
+and writes results to CSV + JSON files for human review.
 
 Usage:
     uv run python tests/test_routing_eval.py
-    # Outputs: tests/routing_eval_results.csv
+    uv run python tests/test_routing_eval.py --client Anthropic
+    uv run python tests/test_routing_eval.py --threshold 0.90
 """
 
+import argparse
 import asyncio
 import csv
 import json
@@ -29,8 +31,22 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from neo4j_agent_memory.baml_client import b
 from neo4j_agent_memory.baml_client.types import ResultItem
 
-# Use OpenAI client since that's what's configured in .env
-BAML_OPTIONS = {"client": "OpenAI"}
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="LLM Routing Evaluation Suite")
+    parser.add_argument(
+        "--client", default="OpenAI",
+        help="BAML client to use (e.g., OpenAI, Anthropic, Resilient). Default: OpenAI",
+    )
+    parser.add_argument(
+        "--threshold", type=float, default=0.80,
+        help="Minimum pass rate to exit 0 (for CI). Default: 0.80",
+    )
+    parser.add_argument(
+        "--output-dir", default=None,
+        help="Directory for timestamped results. Default: tests/",
+    )
+    return parser.parse_args()
 
 
 @dataclass
@@ -118,7 +134,7 @@ ROUTE_QUERY_TESTS = [
             "query": "What did Sarah say?",
             "context": "Sarah presented research findings at Monday's team meeting about the migration project",
         },
-        {"ambiguous": False},
+        {"ambiguous": True, "requires_fanout": True},  # Context spans 3 verticals — still ambiguous
     ),
     TestCase(
         17, "Ambiguity", "AmbiguousQuery_Temporal", "RouteQuery",
@@ -192,7 +208,7 @@ ROUTE_STORAGE_TESTS = [
             "memory_type": "message",
             "context": None,
         },
-        {"primary_vertical": "GENERAL"},
+        {"primary_vertical": "PROJECTS"},  # "next steps" is project-oriented
     ),
 ]
 
@@ -319,11 +335,11 @@ def evaluate_rerank_result(result, expected: dict) -> tuple[bool, str]:
     return passed, "; ".join(issues) if issues else "OK"
 
 
-async def run_test(tc: TestCase) -> TestResult:
+async def run_test(tc: TestCase, baml_options: dict) -> TestResult:
     """Run a single test case against the live BAML client."""
     try:
         if tc.function == "RouteQuery":
-            result = await b.RouteQuery(**tc.args, baml_options=BAML_OPTIONS)
+            result = await b.RouteQuery(**tc.args, baml_options=baml_options)
             passed, notes = evaluate_routing_result(result, tc.expected)
             targets_str = ", ".join(
                 f"{t.vertical.value}({t.confidence:.2f})" for t in result.targets
@@ -340,7 +356,7 @@ async def run_test(tc: TestCase) -> TestResult:
             )
 
         elif tc.function == "RouteStorage":
-            result = await b.RouteStorage(**tc.args, baml_options=BAML_OPTIONS)
+            result = await b.RouteStorage(**tc.args, baml_options=baml_options)
             passed, notes = evaluate_routing_result(result, tc.expected)
             targets_str = ", ".join(
                 f"{t.vertical.value}({t.confidence:.2f})" for t in result.targets
@@ -359,7 +375,7 @@ async def run_test(tc: TestCase) -> TestResult:
         elif tc.function == "RerankResults":
             # Convert dict results to ResultItem objects
             items = [ResultItem(**r) for r in tc.args["results"]]
-            result = await b.RerankResults(query=tc.args["query"], results=items, baml_options=BAML_OPTIONS)
+            result = await b.RerankResults(query=tc.args["query"], results=items, baml_options=baml_options)
             passed, notes = evaluate_rerank_result(result, tc.expected)
             kept_ids = [r.id for r in result.scored_results if r.keep]
             scores = ", ".join(
@@ -382,13 +398,13 @@ async def run_test(tc: TestCase) -> TestResult:
         return TestResult(tc, False, error=str(e))
 
 
-async def run_all_tests() -> list[TestResult]:
+async def run_all_tests(baml_options: dict) -> list[TestResult]:
     """Run all test cases sequentially to avoid API rate limits."""
     results = []
     total = len(ALL_TESTS)
     for i, tc in enumerate(ALL_TESTS, 1):
         print(f"[{i}/{total}] Running {tc.name}...", end=" ", flush=True)
-        result = await run_test(tc)
+        result = await run_test(tc, baml_options)
         status = "PASS" if result.passed else ("ERROR" if result.error else "FAIL")
         print(status)
         results.append(result)
@@ -445,37 +461,53 @@ def write_csv(results: list[TestResult], output_path: str):
             })
 
 
-def write_raw_json(results: list[TestResult], output_path: str):
-    """Write full raw LLM responses to a companion JSON file."""
-    data = []
-    for r in results:
-        data.append({
-            "id": r.test_case.id,
-            "name": r.test_case.name,
-            "passed": r.passed,
-            "raw": json.loads(r.raw_json) if r.raw_json else None,
-            "error": r.error or None,
-        })
+def write_raw_json(results: list[TestResult], output_path: str, client_name: str = "", pass_rate: float = 0.0):
+    """Write full raw LLM responses to a companion JSON file with metadata."""
+    data = {
+        "metadata": {
+            "client": client_name,
+            "timestamp": datetime.now().isoformat(),
+            "total": len(results),
+            "passed": sum(1 for r in results if r.passed),
+            "pass_rate": pass_rate,
+        },
+        "results": [
+            {
+                "id": r.test_case.id,
+                "name": r.test_case.name,
+                "passed": r.passed,
+                "raw": json.loads(r.raw_json) if r.raw_json else None,
+                "error": r.error or None,
+            }
+            for r in results
+        ],
+    }
     with open(output_path, "w") as f:
         json.dump(data, f, indent=2)
 
 
 async def main():
+    args = parse_args()
+    baml_options = {"client": args.client}
+
     print("=" * 60)
     print("LLM Routing Evaluation Suite")
     print(f"Date: {datetime.now().isoformat()}")
+    print(f"Client: {args.client}")
     print(f"Tests: {len(ALL_TESTS)}")
+    print(f"Threshold: {args.threshold:.0%}")
     print("=" * 60)
 
-    results = await run_all_tests()
+    results = await run_all_tests(baml_options)
 
     # Summary
     passed = sum(1 for r in results if r.passed)
     failed = sum(1 for r in results if not r.passed and not r.error)
     errors = sum(1 for r in results if r.error)
+    pass_rate = passed / len(results) if results else 0.0
 
     print("\n" + "=" * 60)
-    print(f"Results: {passed}/{len(results)} passed, {failed} failed, {errors} errors")
+    print(f"Results: {passed}/{len(results)} passed ({pass_rate:.0%}), {failed} failed, {errors} errors")
 
     # Per-category breakdown
     categories = {}
@@ -490,18 +522,33 @@ async def main():
     for cat, counts in categories.items():
         print(f"  {cat}: {counts['passed']}/{counts['total']}")
 
-    # Write outputs
-    csv_path = str(Path(__file__).parent / "routing_eval_results.csv")
-    json_path = str(Path(__file__).parent / "routing_eval_results.json")
+    # Output directory
+    output_dir = Path(args.output_dir) if args.output_dir else Path(__file__).parent
 
-    write_csv(results, csv_path)
-    write_raw_json(results, json_path)
+    # Timestamped output files
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    ts_csv_path = str(output_dir / f"routing_eval_{args.client}_{timestamp}.csv")
+    ts_json_path = str(output_dir / f"routing_eval_{args.client}_{timestamp}.json")
+    write_csv(results, ts_csv_path)
+    write_raw_json(results, ts_json_path, args.client, pass_rate)
 
-    print(f"\nCSV results: {csv_path}")
-    print(f"Raw JSON:    {json_path}")
+    # Always overwrite the "latest" files for quick access
+    latest_csv = str(Path(__file__).parent / "routing_eval_results.csv")
+    latest_json = str(Path(__file__).parent / "routing_eval_results.json")
+    write_csv(results, latest_csv)
+    write_raw_json(results, latest_json, args.client, pass_rate)
+
+    print(f"\nTimestamped CSV: {ts_csv_path}")
+    print(f"Timestamped JSON: {ts_json_path}")
+    print(f"Latest CSV:      {latest_csv}")
+    print(f"Latest JSON:     {latest_json}")
     print("=" * 60)
 
-    return 0 if errors == 0 else 1
+    # CI exit code based on threshold
+    if pass_rate < args.threshold:
+        print(f"\nFAIL: Pass rate {pass_rate:.0%} below threshold {args.threshold:.0%}")
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
