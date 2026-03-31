@@ -15,7 +15,7 @@ Type=simple
 User=centos
 WorkingDirectory=/opt/neo4j-agent-memory-mcp
 EnvironmentFile=/opt/neo4j-agent-memory-mcp/deploy/.env
-ExecStart=/home/centos/.local/bin/uv run neo4j-memory-mcp
+ExecStart=/home/centos/.local/bin/uv run neo4j-memory-mcp --transport sse --host 0.0.0.0 --port 8082
 Restart=always
 RestartSec=5
 
@@ -24,10 +24,8 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=neo4j-memory-mcp
 
-# Security hardening
+# Security hardening (compatible with CentOS 7 systemd)
 NoNewPrivileges=true
-ProtectSystem=strict
-ReadWritePaths=/opt/neo4j-agent-memory-mcp
 
 [Install]
 WantedBy=multi-user.target

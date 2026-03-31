@@ -194,13 +194,6 @@ try:
             lifespan=lifespan,
         )
 
-        @mcp.custom_route("/health", methods=["GET"])
-        async def health_check(request):
-            """Health check for monitoring and systemd watchdog."""
-            from starlette.responses import JSONResponse
-
-            return JSONResponse({"status": "ok"})
-
         from neo4j_agent_memory.mcp._prompts import register_prompts
         from neo4j_agent_memory.mcp._resources import register_resources
         from neo4j_agent_memory.mcp._tools import register_tools
