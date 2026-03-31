@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any
 from fastmcp import Context
 
 from neo4j_agent_memory.mcp._common import get_client, get_reranker, get_registry, get_router
+from neo4j_agent_memory.mcp._logging import log_tool_call
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -110,6 +111,7 @@ def register_tools(mcp: FastMCP) -> None:
     """
 
     @mcp.tool()
+    @log_tool_call
     async def memory_search(
         ctx: Context,
         query: str,
@@ -383,6 +385,7 @@ def register_tools(mcp: FastMCP) -> None:
         return json.dumps(response, default=str)
 
     @mcp.tool()
+    @log_tool_call
     async def memory_store(
         ctx: Context,
         memory_type: str,
@@ -647,6 +650,7 @@ def register_tools(mcp: FastMCP) -> None:
             return json.dumps({"error": str(e)})
 
     @mcp.tool()
+    @log_tool_call
     async def entity_lookup(
         ctx: Context,
         name: str,
@@ -791,6 +795,7 @@ def register_tools(mcp: FastMCP) -> None:
             return json.dumps({"error": str(e)})
 
     @mcp.tool()
+    @log_tool_call
     async def conversation_history(
         ctx: Context,
         session_id: str,
@@ -842,6 +847,7 @@ def register_tools(mcp: FastMCP) -> None:
             return json.dumps({"error": str(e)})
 
     @mcp.tool()
+    @log_tool_call
     async def graph_query(
         ctx: Context,
         query: str,
@@ -906,6 +912,7 @@ def register_tools(mcp: FastMCP) -> None:
             return json.dumps({"error": str(e)})
 
     @mcp.tool()
+    @log_tool_call
     async def add_reasoning_trace(
         ctx: Context,
         session_id: str,
@@ -1019,6 +1026,7 @@ def register_tools(mcp: FastMCP) -> None:
             return json.dumps({"error": str(e)})
 
     @mcp.tool()
+    @log_tool_call
     async def explain_reasoning(
         ctx: Context,
         trace_id: str | None = None,
@@ -1156,6 +1164,7 @@ def register_tools(mcp: FastMCP) -> None:
             return json.dumps({"error": str(e)})
 
     @mcp.tool()
+    @log_tool_call
     async def extract_reasoning(
         ctx: Context,
         text: str,
@@ -1232,6 +1241,7 @@ def register_tools(mcp: FastMCP) -> None:
             return json.dumps({"error": str(e)})
 
     @mcp.tool()
+    @log_tool_call
     async def temporal_query(
         ctx: Context,
         point_in_time: str,
@@ -1285,6 +1295,7 @@ def register_tools(mcp: FastMCP) -> None:
             return json.dumps({"error": str(e)})
 
     @mcp.tool()
+    @log_tool_call
     async def fact_evolution(
         ctx: Context,
         subject: str,
@@ -1337,6 +1348,7 @@ def register_tools(mcp: FastMCP) -> None:
             return json.dumps({"error": str(e)})
 
     @mcp.tool()
+    @log_tool_call
     async def knowledge_state(
         ctx: Context,
         as_of: str,

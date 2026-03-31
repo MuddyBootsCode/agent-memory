@@ -194,6 +194,13 @@ try:
             lifespan=lifespan,
         )
 
+        @mcp.custom_route("/health", methods=["GET"])
+        async def health_check(request):
+            """Health check for monitoring and systemd watchdog."""
+            from starlette.responses import JSONResponse
+
+            return JSONResponse({"status": "ok"})
+
         from neo4j_agent_memory.mcp._prompts import register_prompts
         from neo4j_agent_memory.mcp._resources import register_resources
         from neo4j_agent_memory.mcp._tools import register_tools
@@ -351,6 +358,10 @@ def main() -> None:
     import argparse
     import os
 
+    from neo4j_agent_memory.mcp._logging import configure_logging
+
+    configure_logging()
+
     parser = argparse.ArgumentParser(description="Neo4j Agent Memory MCP Server")
     parser.add_argument(
         "--neo4j-uri",
@@ -375,19 +386,19 @@ def main() -> None:
     parser.add_argument(
         "--transport",
         choices=["stdio", "sse", "http"],
-        default="stdio",
-        help="MCP transport type",
+        default=os.environ.get("MCP_TRANSPORT", "stdio"),
+        help="MCP transport type (env: MCP_TRANSPORT)",
     )
     parser.add_argument(
         "--host",
-        default="127.0.0.1",
-        help="Host for network transports (use 0.0.0.0 to expose on all interfaces)",
+        default=os.environ.get("MCP_HOST", "127.0.0.1"),
+        help="Host for network transports (env: MCP_HOST)",
     )
     parser.add_argument(
         "--port",
         type=int,
-        default=8080,
-        help="Port for network transports",
+        default=int(os.environ.get("MCP_PORT", "8080")),
+        help="Port for network transports (env: MCP_PORT)",
     )
     parser.add_argument(
         "--neo4j-docker-auto",
