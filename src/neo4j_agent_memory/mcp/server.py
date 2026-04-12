@@ -73,6 +73,11 @@ try:
                 _factory_mod.create_extractor = _ext_create_extractor
                 logger.info("Extraction factory patched with BAML support")
 
+                # Patch embedder factory to support Bedrock
+                from neo4j_agent_memory.mcp._embedder_patch import patch_embedder_factory
+
+                patch_embedder_factory()
+
                 # Phase 1: Ensure Neo4j container is running
                 docker_cfg = getattr(settings, "_docker_config", {})
                 neo4j_cfg = settings.neo4j
