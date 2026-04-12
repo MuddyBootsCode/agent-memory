@@ -115,8 +115,11 @@ try:
                     else:
                         return None
 
-                _MemoryClient._create_embedder = _create_embedder_extended
-                logger.info("Embedder factory patched with Bedrock support")
+                try:
+                    _MemoryClient._create_embedder = _create_embedder_extended
+                    logger.info("Embedder factory patched with Bedrock support")
+                except Exception as e:
+                    logger.error("Failed to patch embedder factory: %s", e)
 
                 # Phase 1: Ensure Neo4j container is running
                 docker_cfg = getattr(settings, "_docker_config", {})
