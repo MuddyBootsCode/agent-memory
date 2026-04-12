@@ -19,7 +19,6 @@ client<llm> Bedrock {
   retry_policy StandardRetry
   options {
     model "us.anthropic.claude-sonnet-4-20250514-v1:0"
-    profile env.AWS_PROFILE
     region env.AWS_REGION
     inference_configuration {
       temperature 0
