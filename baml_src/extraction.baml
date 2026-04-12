@@ -35,7 +35,7 @@ class ExtractionOutput {
 }
 
 function ExtractEntities(text: string, entity_types: string) -> ExtractionOutput {
-  client Anthropic
+  client Bedrock
   prompt #"
     Extract entities, relationships, and preferences from the following text.
 

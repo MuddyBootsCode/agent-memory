@@ -28,7 +28,7 @@ class ResearchExtractionOutput {
 }
 
 function ExtractResearchEntities(text: string) -> ResearchExtractionOutput {
-  client Anthropic
+  client Bedrock
   prompt #"
     Extract research-related entities and relationships from the text.
 

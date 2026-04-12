@@ -29,7 +29,7 @@ class MeetingExtractionOutput {
 }
 
 function ExtractMeetingEntities(text: string) -> MeetingExtractionOutput {
-  client Anthropic
+  client Bedrock
   prompt #"
     Extract meeting-related entities and relationships from the text.
 

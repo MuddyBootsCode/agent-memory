@@ -21,7 +21,7 @@ class RerankOutput {
 }
 
 function RerankResults(query: string, results: ResultItem[]) -> RerankOutput {
-  client Anthropic
+  client Bedrock
   prompt #"
     You are a relevance judge. Score each search result for how well it answers
     the user's original query.

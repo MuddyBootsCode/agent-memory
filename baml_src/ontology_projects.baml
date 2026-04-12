@@ -29,7 +29,7 @@ class ProjectExtractionOutput {
 }
 
 function ExtractProjectEntities(text: string) -> ProjectExtractionOutput {
-  client Anthropic
+  client Bedrock
   prompt #"
     Extract project-related entities and relationships from the text.
 

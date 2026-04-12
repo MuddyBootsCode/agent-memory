@@ -20,7 +20,7 @@ function DetectContradictions(
   new_fact_object: string,
   candidates: CandidateFact[]
 ) -> ContradictionResult {
-  client Anthropic
+  client Bedrock
   prompt #"
     You are analyzing whether a NEW FACT contradicts any EXISTING FACTS in a knowledge graph.
 
@@ -58,7 +58,7 @@ function ExtractTemporalContext(
   text: string,
   reference_time: string
 ) -> TemporalExtraction {
-  client Anthropic
+  client Bedrock
   prompt #"
     Extract temporal information from this text. The current reference time is {{ reference_time }}.
 

@@ -26,7 +26,7 @@ class RoutingDecision {
 }
 
 function RouteQuery(query: string, context: string?) -> RoutingDecision {
-  client Anthropic
+  client Bedrock
   prompt #"
     You are a query router for a knowledge graph with multiple database verticals.
     Analyze the user query and determine which database(s) should be searched.
@@ -57,7 +57,7 @@ function RouteQuery(query: string, context: string?) -> RoutingDecision {
 }
 
 function RouteStorage(content: string, memory_type: string, context: string?) -> RoutingDecision {
-  client Anthropic
+  client Bedrock
   prompt #"
     You are a storage router for a knowledge graph. Determine which database
     vertical should store this content.
