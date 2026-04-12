@@ -85,7 +85,7 @@ class BamlEntityExtractor:
             result = await b.ExtractEntities(
                 text=text,
                 entity_types=entity_types_str,
-                **(self._baml_options if self._baml_options else {}),
+                baml_options=self._baml_options if self._baml_options else {},
             )
 
             entities = [
