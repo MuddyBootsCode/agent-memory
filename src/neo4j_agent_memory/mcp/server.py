@@ -132,7 +132,8 @@ try:
                                     username=neo4j_cfg.username,
                                     password=neo4j_cfg.password,
                                     database=db_name,
-                                )
+                                ),
+                                embedding=settings.embedding,
                             )
                             v_client, v_cm = await connect_with_retry(
                                 lambda s=vertical_settings: _MemoryClient(s),
@@ -305,10 +306,33 @@ try:
             docker_startup_timeout: Max seconds to wait for Neo4j startup.
             compose_file: Path to docker-compose.yml (auto-detected if None).
         """
+        import os
+
         from pydantic import SecretStr
 
         from neo4j_agent_memory import MemorySettings
-        from neo4j_agent_memory.config.settings import Neo4jConfig
+        from neo4j_agent_memory.config.settings import EmbeddingConfig, Neo4jConfig
+
+        # Build embedding config from env vars — defaults to Bedrock
+        embedding_provider = os.environ.get("NAM_EMBEDDING_PROVIDER", "bedrock")
+        embedding_kwargs: dict[str, Any] = {
+            "provider": embedding_provider,
+        }
+        if embedding_provider == "bedrock":
+            embedding_kwargs.update({
+                "model": os.environ.get(
+                    "NAM_EMBEDDING_MODEL", "amazon.titan-embed-text-v2:0"
+                ),
+                "dimensions": int(os.environ.get("NAM_EMBEDDING_DIMENSIONS", "1024")),
+                "aws_region": os.environ.get("AWS_REGION", "us-east-1"),
+                "aws_profile": os.environ.get("AWS_PROFILE"),
+            })
+        elif embedding_provider == "openai":
+            embedding_kwargs.update({
+                "model": os.environ.get(
+                    "NAM_EMBEDDING_MODEL", "text-embedding-3-small"
+                ),
+            })
 
         settings = MemorySettings(
             neo4j=Neo4jConfig(
@@ -316,7 +340,8 @@ try:
                 username=neo4j_user,
                 password=SecretStr(neo4j_password),
                 database=neo4j_database,
-            )
+            ),
+            embedding=EmbeddingConfig(**embedding_kwargs),
         )
 
         # Attach Docker config as private attr for lifespan to read
