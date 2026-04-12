@@ -74,9 +74,50 @@ try:
                 logger.info("Extraction factory patched with BAML support")
 
                 # Patch embedder factory to support Bedrock
-                from neo4j_agent_memory.mcp._embedder_patch import patch_embedder_factory
+                def _create_embedder_extended(self):
+                    """Extended _create_embedder with Bedrock support."""
+                    from neo4j_agent_memory.config.settings import EmbeddingProvider
 
-                patch_embedder_factory()
+                    config = self._settings.embedding
+
+                    if config.provider == EmbeddingProvider.OPENAI:
+                        from neo4j_agent_memory.embeddings.openai import OpenAIEmbedder
+
+                        return OpenAIEmbedder(
+                            model=config.model,
+                            api_key=config.api_key.get_secret_value() if config.api_key else None,
+                            dimensions=config.dimensions if config.dimensions != 1536 else None,
+                            batch_size=config.batch_size,
+                        )
+                    elif config.provider == EmbeddingProvider.SENTENCE_TRANSFORMERS:
+                        from neo4j_agent_memory.embeddings.sentence_transformers import (
+                            SentenceTransformerEmbedder,
+                        )
+
+                        return SentenceTransformerEmbedder(
+                            model_name=config.model,
+                            device=config.device,
+                        )
+                    elif config.provider == EmbeddingProvider.BEDROCK:
+                        from neo4j_agent_memory.embeddings.bedrock import BedrockEmbedder
+
+                        logger.info(
+                            "Creating Bedrock embedder (model=%s, region=%s)",
+                            config.model,
+                            config.aws_region,
+                        )
+                        return BedrockEmbedder(
+                            model=config.model,
+                            region_name=config.aws_region,
+                            profile_name=config.aws_profile,
+                            batch_size=config.batch_size,
+                        )
+                    else:
+                        return None
+
+                from neo4j_agent_memory import MemoryClient as _MC
+                _MC._create_embedder = _create_embedder_extended
+                logger.info("Embedder factory patched with Bedrock support")
 
                 # Phase 1: Ensure Neo4j container is running
                 docker_cfg = getattr(settings, "_docker_config", {})
