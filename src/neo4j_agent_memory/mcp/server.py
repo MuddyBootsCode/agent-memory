@@ -115,8 +115,7 @@ try:
                     else:
                         return None
 
-                from neo4j_agent_memory import MemoryClient as _MC
-                _MC._create_embedder = _create_embedder_extended
+                _MemoryClient._create_embedder = _create_embedder_extended
                 logger.info("Embedder factory patched with Bedrock support")
 
                 # Phase 1: Ensure Neo4j container is running
