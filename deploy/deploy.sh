@@ -38,11 +38,17 @@ git pull origin $BRANCH
 export PATH="\$HOME/.local/bin:\$PATH"
 uv sync --frozen --no-dev
 uv run baml-cli generate
-# Overlay server.py must overwrite base package (Python 3.14 resolves base first)
+# Overlay files must overwrite base package (Python 3.14 resolves base first)
 SITE_PKG=\$(python3 -c "import neo4j_agent_memory; import os; print(os.path.dirname(neo4j_agent_memory.__file__))" 2>/dev/null || echo "")
-if [ -n "\$SITE_PKG" ] && [ -f src/neo4j_agent_memory/mcp/server.py ]; then
-    cp src/neo4j_agent_memory/mcp/server.py "\$SITE_PKG/mcp/server.py"
-    echo "Overlay server.py copied to \$SITE_PKG/mcp/"
+if [ -n "\$SITE_PKG" ] && [ -d src/neo4j_agent_memory ]; then
+    cd src/neo4j_agent_memory
+    find . -name '*.py' | while read f; do
+        if [ -f "\$SITE_PKG/\$f" ]; then
+            cp "\$f" "\$SITE_PKG/\$f"
+        fi
+    done
+    cd \$REMOTE_DIR
+    echo "Overlay files synced to \$SITE_PKG"
 fi
 sudo systemctl restart neo4j-memory-mcp
 echo "=== MCP server restarted ==="
@@ -88,11 +94,17 @@ cd $REMOTE_DIR
 export PATH="\$HOME/.local/bin:\$PATH"
 uv sync --frozen --no-dev
 uv run baml-cli generate
-# Overlay server.py must overwrite base package (Python 3.14 resolves base first)
+# Overlay files must overwrite base package (Python 3.14 resolves base first)
 SITE_PKG=\$(python3 -c "import neo4j_agent_memory; import os; print(os.path.dirname(neo4j_agent_memory.__file__))" 2>/dev/null || echo "")
-if [ -n "\$SITE_PKG" ] && [ -f src/neo4j_agent_memory/mcp/server.py ]; then
-    cp src/neo4j_agent_memory/mcp/server.py "\$SITE_PKG/mcp/server.py"
-    echo "Overlay server.py copied to \$SITE_PKG/mcp/"
+if [ -n "\$SITE_PKG" ] && [ -d src/neo4j_agent_memory ]; then
+    cd src/neo4j_agent_memory
+    find . -name '*.py' | while read f; do
+        if [ -f "\$SITE_PKG/\$f" ]; then
+            cp "\$f" "\$SITE_PKG/\$f"
+        fi
+    done
+    cd \$REMOTE_DIR
+    echo "Overlay files synced to \$SITE_PKG"
 fi
 echo "Dependencies installed, BAML generated"
 SCRIPT
