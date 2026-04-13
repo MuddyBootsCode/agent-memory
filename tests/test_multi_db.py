@@ -118,9 +118,16 @@ class TestQueryRouter:
             router = QueryRouter(
                 available_databases=["neo4j", "meetings"]
             )
-            # BAML client import will fail in test env
-            result = await router.route_query("standup notes")
-            assert result.primary == "neo4j"
+            # Force BAML to fail so fallback path is exercised.
+            # The router imports b inside the method, so patch the module it imports from.
+            mock_b = MagicMock()
+            mock_b.RouteQuery = AsyncMock(side_effect=Exception("BAML unavailable"))
+            with patch(
+                "neo4j_agent_memory.baml_client.async_client.b",
+                mock_b,
+            ):
+                result = await router.route_query("standup notes")
+                assert result.primary == "neo4j"
 
     @pytest.mark.asyncio
     async def test_storage_route_disabled(self):
@@ -172,9 +179,15 @@ class TestResultReranker:
 
         reranker = ResultReranker(enabled=True)
         results = [{"id": str(i)} for i in range(5)]
-        # BAML client import will fail in test env
-        output = await reranker.rerank("query", results)
-        assert output == results
+        # Force BAML to fail so fallback path is exercised.
+        mock_b = MagicMock()
+        mock_b.RerankResults = AsyncMock(side_effect=Exception("BAML unavailable"))
+        with patch(
+            "neo4j_agent_memory.baml_client.async_client.b",
+            mock_b,
+        ):
+            output = await reranker.rerank("query", results)
+            assert output == results
 
 
 class TestResultMerger:

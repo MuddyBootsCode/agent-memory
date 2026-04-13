@@ -1,7 +1,8 @@
 """Smoke tests validating the integration test infrastructure.
 
 These tests verify that the fixture chain works end-to-end:
-Neo4j connection → test database → MemoryClient → Bedrock embeddings.
+Neo4j connection → test database → MemoryClient → Bedrock embeddings
+→ BAML entity extraction via Bedrock.
 """
 
 import pytest
@@ -19,8 +20,6 @@ class TestFixtureChain:
         rows = await memory_client.graph.execute_read(
             "MATCH (n) RETURN count(n) AS count", {}
         )
-        # Schema nodes may exist, but no user data
-        # Just verify the query executes without error
         assert isinstance(rows[0]["count"], int)
 
     async def test_store_and_retrieve_message(self, memory_client):
@@ -92,3 +91,96 @@ class TestFixtureChain:
             "MATCH (f:Fact) RETURN count(f) AS count", {}
         )
         assert rows[0]["count"] == 0, "Previous test data should be wiped"
+
+
+class TestEntityExtraction:
+    """Verify BAML entity extraction via Bedrock creates correct graph structure."""
+
+    async def test_extraction_creates_entity_nodes(self, memory_client, cypher_session):
+        """Storing a message with extract_entities=True creates Entity nodes."""
+        await memory_client.short_term.add_message(
+            session_id="extraction-smoke",
+            role="user",
+            content="Michael is VP of Engineering at Graphable.",
+            generate_embedding=True,
+            extract_entities=True,
+        )
+
+        entities = await cypher_session.execute_read(
+            "MATCH (e:Entity) RETURN e.name AS name, e.type AS type "
+            "ORDER BY e.name",
+            {},
+        )
+        names = {e["name"] for e in entities}
+        assert "Michael" in names, f"Expected 'Michael' in {names}"
+        assert "Graphable" in names, f"Expected 'Graphable' in {names}"
+
+        # Verify types
+        type_map = {e["name"]: e["type"] for e in entities}
+        assert type_map["Michael"] == "PERSON"
+        assert type_map["Graphable"] == "ORGANIZATION"
+
+    async def test_extraction_creates_relationships(self, memory_client, cypher_session):
+        """Entity extraction creates RELATED_TO edges with relation_type."""
+        await memory_client.short_term.add_message(
+            session_id="extraction-rels",
+            role="user",
+            content="Sarah works at DataVault Solutions and drives a BMW X5.",
+            generate_embedding=True,
+            extract_entities=True,
+        )
+
+        rels = await cypher_session.execute_read(
+            "MATCH (a:Entity)-[r:RELATED_TO]->(b:Entity) "
+            "RETURN a.name AS src, r.relation_type AS rel, b.name AS tgt",
+            {},
+        )
+        assert len(rels) >= 1, "Expected at least one relationship"
+
+        # At minimum, WORKS_AT should be extracted
+        rel_tuples = {(r["src"], r["rel"], r["tgt"]) for r in rels}
+        has_works_at = any(
+            src == "Sarah" and "WORK" in rel.upper()
+            for src, rel, tgt in rel_tuples
+        )
+        assert has_works_at, f"Expected WORKS_AT for Sarah, got {rel_tuples}"
+
+    async def test_extraction_creates_mentions_edges(self, memory_client, cypher_session):
+        """Messages link to extracted entities via MENTIONS edges."""
+        msg = await memory_client.short_term.add_message(
+            session_id="extraction-mentions",
+            role="user",
+            content="Raj Patel is the CTO of DataVault.",
+            generate_embedding=True,
+            extract_entities=True,
+        )
+
+        mentions = await cypher_session.execute_read(
+            "MATCH (m:Message {id: $id})-[:MENTIONS]->(e:Entity) "
+            "RETURN e.name AS name",
+            {"id": str(msg.id)},
+        )
+        mentioned_names = {m["name"] for m in mentions}
+        assert "Raj Patel" in mentioned_names or "Raj" in mentioned_names, (
+            f"Expected Raj in mentions, got {mentioned_names}"
+        )
+
+    async def test_no_orphaned_entities(self, memory_client, cypher_session):
+        """Every extracted Entity should be linked to at least one Message."""
+        await memory_client.short_term.add_message(
+            session_id="orphan-check",
+            role="user",
+            content="Alice and Bob work at Acme Corp in Denver.",
+            generate_embedding=True,
+            extract_entities=True,
+        )
+
+        orphans = await cypher_session.execute_read(
+            "MATCH (e:Entity) "
+            "WHERE NOT (e)<-[:MENTIONS]-(:Message) "
+            "RETURN e.name AS name",
+            {},
+        )
+        assert len(orphans) == 0, (
+            f"Orphaned entities (no MENTIONS edge): {[o['name'] for o in orphans]}"
+        )

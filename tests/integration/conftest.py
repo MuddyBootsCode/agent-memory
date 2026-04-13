@@ -1,15 +1,16 @@
 """Integration test fixtures requiring a running Neo4j instance.
 
 Provides real MemoryClient connections to a dedicated test database,
-with Bedrock embeddings via the graphable-aws profile.
+with Bedrock for both embeddings (Titan V2) and BAML entity extraction
+(Claude Sonnet via aws-bedrock provider).
 
 Usage:
     uv run pytest tests/integration/ -m integration
 
 Environment:
     - Neo4j must be running (docker-compose up)
-    - AWS profile 'graphable-aws' must have Bedrock access for embedding tests
-    - No ANTHROPIC_API_KEY needed (entity extraction disabled in fixtures)
+    - AWS profile 'graphable-aws' must have Bedrock access
+    - No OPENAI_API_KEY or ANTHROPIC_API_KEY needed — everything runs via Bedrock
 """
 
 import asyncio
@@ -128,26 +129,63 @@ async def test_database(neo4j_driver):
 # ── Function-scoped: MemoryClient with Bedrock embeddings ───────────
 
 
-@pytest.fixture
-async def memory_client(test_database):
-    """Function-scoped MemoryClient connected to the test database.
+_ENV_OVERRIDES = {
+    "NAM_EXTRACTION__BAML_ENABLED": "true",
+    "AWS_REGION": "us-east-1",
+    "AWS_PROFILE": "graphable-aws",
+}
 
-    Uses Bedrock for embeddings. Wipes all data before each test
-    for isolation. Entity extraction is NOT enabled (no ANTHROPIC_API_KEY
-    needed) — tests that need extraction should mock it or skip.
+
+class _EnvContext:
+    """Context manager that sets env vars and restores originals on exit."""
+
+    def __init__(self, overrides: dict[str, str]):
+        self._overrides = overrides
+        self._originals: dict[str, str | None] = {}
+
+    def __enter__(self):
+        for key, value in self._overrides.items():
+            self._originals[key] = os.environ.get(key)
+            os.environ[key] = value
+        return self
+
+    def __exit__(self, *exc):
+        for key, original in self._originals.items():
+            if original is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = original
+
+
+def _apply_patches():
+    """Apply Bedrock embedder + BAML extraction factory patches.
+
+    Safe to call multiple times — patches are idempotent.
+    Does NOT set env vars — use _EnvContext for that.
     """
+    # Patch embedder factory for Bedrock
     from neo4j_agent_memory.mcp._embedder_patch import patch_embedder_factory
 
     patch_embedder_factory()
 
-    from neo4j_agent_memory import MemoryClient
+    # Patch extraction factory for BAML
+    import neo4j_agent_memory.extraction.factory as _factory_mod
+    from neo4j_agent_memory.extraction.factory_ext import (
+        create_extractor as _ext_create_extractor,
+    )
+
+    _factory_mod.create_extractor = _ext_create_extractor
+
+
+def _create_client_settings(test_database: str):
+    """Build MemorySettings for the test database with Bedrock."""
     from neo4j_agent_memory.config.settings import (
         EmbeddingConfig,
         MemorySettings,
         Neo4jConfig,
     )
 
-    settings = MemorySettings(
+    return MemorySettings(
         neo4j=Neo4jConfig(
             password=_neo4j_auth()[1],
             database=test_database,
@@ -155,10 +193,23 @@ async def memory_client(test_database):
         embedding=EmbeddingConfig(**BEDROCK_CONFIG),
     )
 
-    async with MemoryClient(settings=settings) as client:
-        # Wipe all data for test isolation
-        await client.graph.execute_write("MATCH (n) DETACH DELETE n", {})
-        yield client
+
+@pytest.fixture
+async def memory_client(test_database):
+    """Function-scoped MemoryClient connected to the test database.
+
+    Uses Bedrock for both embeddings (Titan V2) and entity extraction
+    (Claude Sonnet via BAML). Wipes all data before each test for isolation.
+
+    Env vars are scoped to this fixture — they don't leak into unit tests.
+    """
+    _apply_patches()
+    from neo4j_agent_memory import MemoryClient
+
+    with _EnvContext(_ENV_OVERRIDES):
+        async with MemoryClient(settings=_create_client_settings(test_database)) as client:
+            await client.graph.execute_write("MATCH (n) DETACH DELETE n", {})
+            yield client
 
 
 @pytest.fixture
@@ -168,27 +219,12 @@ async def memory_client_no_wipe(test_database):
     Use when tests build on each other (e.g., cross-session entity
     accumulation tests). The test module is responsible for cleanup.
     """
-    from neo4j_agent_memory.mcp._embedder_patch import patch_embedder_factory
-
-    patch_embedder_factory()
-
+    _apply_patches()
     from neo4j_agent_memory import MemoryClient
-    from neo4j_agent_memory.config.settings import (
-        EmbeddingConfig,
-        MemorySettings,
-        Neo4jConfig,
-    )
 
-    settings = MemorySettings(
-        neo4j=Neo4jConfig(
-            password=_neo4j_auth()[1],
-            database=test_database,
-        ),
-        embedding=EmbeddingConfig(**BEDROCK_CONFIG),
-    )
-
-    async with MemoryClient(settings=settings) as client:
-        yield client
+    with _EnvContext(_ENV_OVERRIDES):
+        async with MemoryClient(settings=_create_client_settings(test_database)) as client:
+            yield client
 
 
 # ── Raw Cypher helper for graph assertions ───────────────────────────
